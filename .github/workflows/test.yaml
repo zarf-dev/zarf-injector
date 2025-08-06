@@ -17,5 +17,5 @@ jobs:
       - name: "Build Rust Binary for x86_64 and arm64"
         run: |
           make install-cross
-          make injector-linux
+          make injector
           make check-size
