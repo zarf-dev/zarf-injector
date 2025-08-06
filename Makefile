@@ -10,17 +10,17 @@ help: ## Display this help information
 clean: ## Clean the build directory
 	rm -rf target
 
-install-cross: # installs cross
+install-cross: ## installs cross
 	cargo install cross --git https://github.com/cross-rs/cross
 
 injector-linux: cross-injector-amd cross-injector-arm
 
-cross-injector-amd: # builds the injector for amd64
+cross-injector-amd: ## builds the injector for amd64
 	rustup target add x86_64-unknown-linux-musl
 	cross build --target x86_64-unknown-linux-musl --release
 
 
-cross-injector-arm: # builds the injector for arm64
+cross-injector-arm: ## builds the injector for arm64
 	rustup target add aarch64-unknown-linux-musl
 	cross build --target aarch64-unknown-linux-musl --release
 
