@@ -13,18 +13,23 @@ clean: ## Clean the build directory
 install-cross: ## installs cross
 	cargo install cross --git https://github.com/cross-rs/cross
 
-injector-linux: cross-injector-amd cross-injector-arm
+injector: injector-amd injector-arm ## Builds the injector for both platforms
 
-cross-injector-amd: ## builds the injector for amd64
+injector-amd: ## builds the injector for amd64
 	rustup target add x86_64-unknown-linux-musl
 	cross build --target x86_64-unknown-linux-musl --release
 
-
-cross-injector-arm: ## builds the injector for arm64
+injector-arm: ## builds the injector for arm64
 	rustup target add aarch64-unknown-linux-musl
 	cross build --target aarch64-unknown-linux-musl --release
 
-list-sizes: ## List the sizes of the Zarf injector binaries
-	@echo '\n\033[0;36mSize of Zarf injector binaries:\033[0m\n'; \
-	du -k target/x86_64-unknown-linux-musl/release/zarf-injector; \
-	du -k target/aarch64-unknown-linux-musl/release/zarf-injector
+check-size: ## Validate that both injector binaries are under 1 MiB
+	@max_size=1024; \
+	amd_size=$$(du -k target/x86_64-unknown-linux-musl/release/zarf-injector | cut -f1); \
+	arm_size=$$(du -k target/aarch64-unknown-linux-musl/release/zarf-injector | cut -f1); \
+	echo "AMD64 injector: $${amd_size}k"; \
+	echo "ARM64 injector: $${arm_size}k"; \
+	if [ $$amd_size -ge $$max_size ] || [ $$arm_size -ge $$max_size ]; then \
+		echo "Error: One or both injectors exceed 1 MiB (1024k) limit"; \
+		exit 1; \
+	fi
