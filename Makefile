@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2021-Present The Zarf Authors
+
+.PHONY: help
+help: ## Display this help information
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
+	  | sort | awk 'BEGIN {FS = ":.*?## "}; \
+	  {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
+
+clean: ## Clean the build directory
+	rm -rf target
+
+install-cross: ## installs cross
+	cargo install cross --git https://github.com/cross-rs/cross
+
+injector-linux: cross-injector-amd cross-injector-arm
+
+cross-injector-amd: ## builds the injector for amd64
+	rustup target add x86_64-unknown-linux-musl
+	cross build --target x86_64-unknown-linux-musl --release
+
+
+cross-injector-arm: ## builds the injector for arm64
+	rustup target add aarch64-unknown-linux-musl
+	cross build --target aarch64-unknown-linux-musl --release
+
+list-sizes: ## List the sizes of the Zarf injector binaries
+	@echo '\n\033[0;36mSize of Zarf injector binaries:\033[0m\n'; \
+	du -k target/x86_64-unknown-linux-musl/release/zarf-injector; \
+	du -k target/aarch64-unknown-linux-musl/release/zarf-injector
