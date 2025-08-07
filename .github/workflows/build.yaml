@@ -1,8 +1,4 @@
-name: Zarf Injector Rust Binaries
-
-permissions:
-  contents: read
-  id-token: write
+name: Build Zarf Injector
 
 on:
   pull_request:
