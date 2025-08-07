@@ -4,3 +4,8 @@ registry_image_domain = ''
 registry_image = 'library/registry'
 registry_image_tag = '3.0.0'
 
+# These are necessary to set since they're in the init package constants which get imported at the package level
+agent_image_domain = ''
+agent_image = ''
+agent_image_tag = ''
+gitea_image = ''
