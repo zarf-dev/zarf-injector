@@ -24,7 +24,9 @@ jobs:
           zarf package create
       
       - name: "Setup Kind" 
-        run: kind create cluster
+        run: |
+          kind create cluster
+          kubectl scale deploy -n kube-system coredns --replicas=1
       
       - name: "Run zarf init"
         run: |
