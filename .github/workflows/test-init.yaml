@@ -21,16 +21,16 @@ jobs:
         run: |
           make install-cross
           make injector
+
+      - name: "Setup K3d" 
+        run: |
+          curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
+          k3d cluster create
         
       - name: "Build Zarf package"
         run: |
           cd test
           zarf package create
-      
-      - name: "Setup K3d" 
-        run: |
-          curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
-          k3d cluster create
       
       - name: "Run zarf init"
         run: |
