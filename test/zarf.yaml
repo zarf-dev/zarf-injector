@@ -1,0 +1,34 @@
+kind: ZarfInitConfig
+metadata:
+  name: init
+
+components:
+  - name: zarf-injector
+    required: true
+    only:
+      cluster:
+        architecture: amd64
+    files:
+      - source: "../target/x86_64-unknown-linux-musl/release/zarf-injector"
+        target: "###ZARF_TEMP###/zarf-injector"
+        executable: true
+
+  - name: zarf-injector
+    required: true
+    only:
+      cluster:
+        architecture: arm64
+    files:
+      - source: "../target/aarch64-unknown-linux-musl/release/zarf-injector"
+        target: "###ZARF_TEMP###/zarf-injector"
+        executable: true
+
+  - name: zarf-seed-registry
+    required: true
+    import:
+      url: oci://ghcr.io/zarf-dev/packages/init:v0.59.0
+
+  - name: zarf-registry
+    required: true
+    import:
+      url: oci://ghcr.io/zarf-dev/packages/init:v0.59.0
