@@ -27,10 +27,10 @@ jobs:
           cd test
           zarf package create
       
-      - name: "Setup Kind" 
+      - name: "Setup K3d" 
         run: |
-          kind create cluster
-          kubectl scale deploy -n kube-system coredns --replicas=1
+          curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
+          k3d cluster create
       
       - name: "Run zarf init"
         run: |
