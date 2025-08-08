@@ -15,21 +15,25 @@ install-cross: ## installs cross
 
 injector: injector-amd injector-arm ## Builds the injector for both platforms
 
-injector-amd: ## builds the injector for amd64
+injector-amd: target/x86_64-unknown-linux-musl/release/zarf-injector ## builds the injector for amd64
+
+injector-arm: target/aarch64-unknown-linux-musl/release/zarf-injector ## builds the injector for arm64
+
+check-size: injector ## Validate that both injector binaries are under 1 MiB
+	@max_size=1048576; \
+	amd_size=$$(stat -c%s target/x86_64-unknown-linux-musl/release/zarf-injector); \
+	arm_size=$$(stat -c%s target/aarch64-unknown-linux-musl/release/zarf-injector); \
+	echo "AMD64 injector: $${amd_size}b"; \
+	echo "ARM64 injector: $${arm_size}b"; \
+	if [ $$amd_size -ge $$max_size ] || [ $$arm_size -ge $$max_size ]; then \
+		echo "Error: One or both injectors exceed 1 MiB ($$max_size byte) limit"; \
+		exit 1; \
+	fi
+
+target/x86_64-unknown-linux-musl/release/zarf-injector: src/main.rs 
 	rustup target add x86_64-unknown-linux-musl
 	cross build --target x86_64-unknown-linux-musl --release
 
-injector-arm: ## builds the injector for arm64
+target/aarch64-unknown-linux-musl/release/zarf-injector: src/main.rs
 	rustup target add aarch64-unknown-linux-musl
 	cross build --target aarch64-unknown-linux-musl --release
-
-check-size: ## Validate that both injector binaries are under 1 MiB
-	@max_size=1024; \
-	amd_size=$$(du -k target/x86_64-unknown-linux-musl/release/zarf-injector | cut -f1); \
-	arm_size=$$(du -k target/aarch64-unknown-linux-musl/release/zarf-injector | cut -f1); \
-	echo "AMD64 injector: $${amd_size}k"; \
-	echo "ARM64 injector: $${arm_size}k"; \
-	if [ $$amd_size -ge $$max_size ] || [ $$arm_size -ge $$max_size ]; then \
-		echo "Error: One or both injectors exceed 1 MiB (1024k) limit"; \
-		exit 1; \
-	fi
