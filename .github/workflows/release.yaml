@@ -1,0 +1,35 @@
+name: Release Injector
+
+on:
+  push:
+    tags:
+      - '*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: "Checkout Repo"
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: "Build injector"
+        run: |
+          make install-cross
+          make injector
+
+      - name: "Rename binaries"
+        run: |
+          cp target/aarch64-unknown-linux-musl/release/zarf-injector zarf-injector-arm64
+          cp target/x86_64-unknown-linux-musl/release/zarf-injector zarf-injector-amd64
+
+      - name: "Create Release"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create ${{ github.ref_name }} \
+            zarf-injector-arm64 \
+            zarf-injector-amd64 \
+            --title "${{ github.ref_name }}" \
+            --generate-notes
