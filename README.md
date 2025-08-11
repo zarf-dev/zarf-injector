@@ -49,7 +49,7 @@ rustup toolchain install --force-non-host stable-x86_64-unknown-linux-musl
 ```
 Then build
 ```
-make injector-linux list-sizes
+make injector
 ```
 
 This will build into `target/*--unknown-linux-musl/release`
@@ -63,6 +63,7 @@ make check-sizes
 ```
 
 ```bash
+Injector sizes:
 AMD64 injector: 1011736b
 ARM64 injector: 917512b
 ```
