@@ -31,10 +31,10 @@ check-size: injector ## Validate that both injector binaries are under 1 MiB
 		exit 1; \
 	fi
 
-target/x86_64-unknown-linux-musl/release/zarf-injector: src/main.rs 
+target/x86_64-unknown-linux-musl/release/zarf-injector: src/main.rs Cargo.toml
 	rustup target add x86_64-unknown-linux-musl
 	cross build --target x86_64-unknown-linux-musl --release
 
-target/aarch64-unknown-linux-musl/release/zarf-injector: src/main.rs
+target/aarch64-unknown-linux-musl/release/zarf-injector: src/main.rs Cargo.toml
 	rustup target add aarch64-unknown-linux-musl
 	cross build --target aarch64-unknown-linux-musl --release
