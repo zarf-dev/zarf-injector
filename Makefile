@@ -23,6 +23,7 @@ check-size: injector ## Validate that both injector binaries are under 1 MiB
 	@max_size=1048576; \
 	amd_size=$$(stat -c%s target/x86_64-unknown-linux-musl/release/zarf-injector); \
 	arm_size=$$(stat -c%s target/aarch64-unknown-linux-musl/release/zarf-injector); \
+	echo "Injector sizes: "; \
 	echo "AMD64 injector: $${amd_size}b"; \
 	echo "ARM64 injector: $${arm_size}b"; \
 	if [ $$amd_size -ge $$max_size ] || [ $$arm_size -ge $$max_size ]; then \

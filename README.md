@@ -27,7 +27,7 @@ This enables a distro-agnostic way to inject real `registry:3` image into a runn
 
 * Install Rust using https://rustup.rs/
 * Install cross with `make install-cross`
-* Install Docker or Podman have it running
+* Install Docker or Podman and have it running
 
 ## Building on Debian-based Systems
 
@@ -38,7 +38,7 @@ sudo apt-get install build-essential
 ```
 Then build
 ```bash
-make injector-linux list-sizes
+make injector
 ```
 
 ## Building on Apple Silicon
@@ -54,65 +54,24 @@ make injector-linux list-sizes
 
 This will build into `target/*--unknown-linux-musl/release`
 
-
-
 ## Checking Binary Size
 
 Due to the ConfigMap size limit (1MiB for binary data), we need to make sure the binary is small enough to fit.
 
 ```bash
-make list-sizes
+make check-sizes
 ```
 
-```sh
-make injector-linux
-...
-
-Size of Zarf injector binaries:
-
-840k    target/x86_64-unknown-linux-musl/release/zarf-injector
-713k    target/aarch64-unknown-linux-musl/release/zarf-injector
+```bash
+AMD64 injector: 1011736b
+ARM64 injector: 917512b
 ```
 
 ## Testing your injector
 
-Build your injector by following the steps above, or running one of the following:
+Build your injector by following the steps above then run the following the `test` directory: 
+
+```bash
+zarf package create
+zarf init --confirm
 ```
-make injector-linux
-
-## OR
-## works on apple silicon
-make cross-injector-linux
-
-```
-
-Point the [zarf-registry/zarf.yaml](../../packages/zarf-registry/zarf.yaml) to
-the locally built injector image.
-
-```
-    files:
-      # Rust Injector Binary
-      - source: ../../src/injector/target/x86_64-unknown-linux-musl/release/zarf-injector
-        target: "###ZARF_TEMP###/zarf-injector"
-        <!-- shasum: "###ZARF_PKG_TMPL_INJECTOR_AMD64_SHASUM###" -->
-        executable: true
-
-    files:
-      # Rust Injector Binary
-      - source: ../../src/injector/target/aarch64-unknown-linux-musl/release/zarf-injector
-        target: "###ZARF_TEMP###/zarf-injector"
-        <!-- shasum: "###ZARF_PKG_TMPL_INJECTOR_ARM64_SHASUM###" -->
-        executable: true
-```
-
-In Zarf Root Directory, run:
-```
-zarf tools clear-cache
-make clean
-make && make init-package
-```
-
-If you are running on an Apple Silicon, add the `ARCH` flag:  `make init-package ARCH=arm64`
-
-This builds all artifacts within the `/build` directory. Running `zarf init` would look like:
-`.build/zarf-mac-apple init --components git-server -l trace`
