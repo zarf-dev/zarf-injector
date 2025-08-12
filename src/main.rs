@@ -201,9 +201,15 @@ async fn handle_get_manifest(name: String, reference: String) -> Response {
             .join("sha256")
             .join(&sha_manifest);
         if media_type_manifest.is_empty() {
-            let file_content = fs::read_to_string(file_path.clone()).expect("file is read");
-            let file_json: Value = serde_json::from_str(&file_content).expect("unable to parse file");
-            media_type_manifest = file_json["mediaType"].as_str().unwrap_or(OCI_MIME_TYPE).to_owned();
+            match fs::read_to_string(file_path.clone()).ok()
+                .and_then(|content| serde_json::from_str::<Value>(&content).ok()) {
+                Some(file_json) => media_type_manifest = file_json["mediaType"].as_str().unwrap_or(OCI_MIME_TYPE).to_owned(),
+                None => return Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .body("Not Found".to_string())
+                    .unwrap()
+                    .into_response()
+            }
         }
         match tokio::fs::File::open(&file_path).await {
             Ok(file) => {
