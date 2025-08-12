@@ -58,7 +58,7 @@ fn collect_binary_data(paths: &Vec<PathBuf>) -> io::Result<Vec<u8>> {
     Ok(buffer)
 }
 
-/// Unpacks the zarf-payload-* configmaps back into a tarball, then unpacks into the CWD
+/// Unpacks the zarf-payload-* configmaps back into a tarball, then unpacks into ./zarf-seed
 ///
 /// Inspired by https://medium.com/@nlauchande/rust-coding-up-a-simple-concatenate-files-tool-and-first-impressions-a8cbe680e887
 fn unpack(sha_sum: &String) {
