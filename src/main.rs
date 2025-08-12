@@ -314,7 +314,6 @@ mod test {
         }
     }
 
-    // TODO: Make this configurable?
     const TEST_IMAGE: &str = "ghcr.io/zarf-dev/doom-game:0.0.1";
     // Split gzip into 1024 * 768 kb chunks
     const CHUNK_SIZE: usize = 1024 * 768;
