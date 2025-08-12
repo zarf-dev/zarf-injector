@@ -282,6 +282,7 @@ mod test {
     use bollard::{Docker, image::CreateImageOptions};
     use flate2::{Compression, write::GzEncoder};
     use futures_util::{TryStreamExt, future::ready};
+    use regex_lite::Regex;
     use sha2::{Digest, Sha256};
     use std::{
         fs::File,
@@ -403,7 +404,7 @@ mod test {
     // "Normalizes" the image reference by removing the registry component from it,
     // so that it can be used for referring to local images.
     fn normalize_manifest_reference(identifier: &str) -> Result<String> {
-        let re = regex::Regex::new(REFERENCE_REGEXP)?;
+        let re = Regex::new(REFERENCE_REGEXP)?;
         let caps = re
             .captures(identifier)
             .context("should have matched captures for extracting reference components")?;
