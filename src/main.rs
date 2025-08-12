@@ -289,9 +289,30 @@ mod test {
         io::{BufRead, BufReader, Cursor, Seek, Write},
         path::{Path, PathBuf},
     };
-    use temp_dir::TempDir;
 
     use crate::{start_seed_registry, unpack};
+
+    struct TempDir {
+        path: PathBuf,
+    }
+
+    impl TempDir {
+        fn new() -> Result<Self> {
+            let path = std::env::temp_dir().join(format!("zarf-test-{}", std::process::id()));
+            std::fs::create_dir_all(&path).context("should have created temporary directory")?;
+            Ok(Self { path })
+        }
+
+        fn path(&self) -> &PathBuf {
+            &self.path
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
 
     // TODO: Make this configurable?
     const TEST_IMAGE: &str = "ghcr.io/zarf-dev/doom-game:0.0.1";
@@ -306,16 +327,19 @@ mod test {
     async fn test_integration() {
         let docker = Docker::connect_with_socket_defaults()
             .expect("should have been able to create a Docker client");
-        let tmpdir = TempDir::new().expect("should have created a temporary directory");
 
-        let env = TestEnv::new(docker.clone(), TEST_IMAGE, tmpdir.path().to_owned())
+        // Create a temporary directory that will auto-cleanup on drop
+        let tmpdir = TempDir::new().expect("should have created temporary directory");
+
+        let env = TestEnv::new(docker.clone(), TEST_IMAGE, tmpdir.path().clone())
             .await
             .expect("should have setup the test environment");
 
+        println!("tmpdir is at {:?}", tmpdir.path());
         let output_root = env.output_dir();
         unsafe {
             std::env::set_var("ZARF_INJECTOR_INIT_ROOT", env.input_dir());
-            std::env::set_var("ZARF_INJECTOR_SEED_ROOT", &output_root);
+            std::env::set_var("ZARF_INJECTOR_SEED_ROO", &output_root);
         }
         unpack(&env.shasum());
 
@@ -324,7 +348,6 @@ mod test {
         assert!(Path::new(&output_root.join("manifest.json")).exists());
         assert!(Path::new(&output_root.join("oci-layout")).exists());
         assert!(Path::new(&output_root.join("repositories")).exists());
-        // TODO: Assert all of the blobs referenced in index.json and manifest.json exist under blobs/sha256/...
 
         localize_test_image(TEST_IMAGE, &output_root)
             .expect("should have localized the test image's index.json");
