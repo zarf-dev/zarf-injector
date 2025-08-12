@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use axum::{
     Router,
     body::Body,
-    extract::Path,
+    extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::get,
@@ -58,14 +58,10 @@ fn collect_binary_data(paths: &Vec<PathBuf>) -> io::Result<Vec<u8>> {
     Ok(buffer)
 }
 
-/// Unpacks the zarf-payload-* configmaps back into a tarball, then unpacks into the CWD
+/// Unpacks the zarf-payload-* configmaps back into a tarball, then unpacks into the specified directory
 ///
 /// Inspired by https://medium.com/@nlauchande/rust-coding-up-a-simple-concatenate-files-tool-and-first-impressions-a8cbe680e887
-fn unpack(sha_sum: &String) {
-    let init_root =
-        std::env::var("ZARF_INJECTOR_INIT_ROOT").unwrap_or_else(|_| String::from("/zarf-init"));
-    let seed_root =
-        std::env::var("ZARF_INJECTOR_SEED_ROOT").unwrap_or_else(|_| String::from("/zarf-seed"));
+fn unpack(sha_sum: &String, init_root: &str, seed_root: &str) {
     // get the list of file matches to merge
     let glob_path = format!("{}/zarf-payload-*", init_root);
     let file_partials: Result<Vec<_>, _> = glob(&glob_path)
@@ -99,14 +95,14 @@ fn unpack(sha_sum: &String) {
         .expect("Unable to unarchive the resulting tarball");
 }
 
-/// Starts a static docker compliant registry server that only serves the single image from the CWD
+/// Starts a static docker compliant registry server that only serves the single image from the specified directory
 ///
 /// (which is a OCI image layout):
 ///
 /// index.json - the image index
 /// blobs/sha256/<sha256sum> - the image layers
 /// oci-layout - the OCI image layout
-fn start_seed_registry() -> Router {
+fn start_seed_registry(seed_root: String) -> Router {
     // The name and reference parameter identify the image
     // The reference may include a tag or digest.
     Router::new()
@@ -135,9 +131,10 @@ fn start_seed_registry() -> Router {
                     .unwrap()
             }),
         )
+        .with_state(seed_root)
 }
 
-async fn handler(Path(path): Path<String>) -> Response {
+async fn handler(State(seed_root): State<String>, Path(path): Path<String>) -> Response {
     println!("request: {}", path);
     let path = &path;
     let manifest = Regex::new("(.+)/manifests/(.+)").unwrap();
@@ -147,11 +144,11 @@ async fn handler(Path(path): Path<String>) -> Response {
         let caps = manifest.captures(path).unwrap();
         let name = caps.get(1).unwrap().as_str().to_string();
         let reference = caps.get(2).unwrap().as_str().to_string();
-        handle_get_manifest(name, reference).await
+        handle_get_manifest(name, reference, &seed_root).await
     } else if blob.is_match(path) {
         let caps = blob.captures(path).unwrap();
         let tag = caps.get(1).unwrap().as_str().to_string();
-        handle_get_digest(tag).await
+        handle_get_digest(tag, &seed_root).await
     } else {
         Response::builder()
             .status(StatusCode::NOT_FOUND)
@@ -162,10 +159,8 @@ async fn handler(Path(path): Path<String>) -> Response {
 }
 
 /// Handles the GET request for the manifest (only returns a OCI manifest regardless of Accept header)
-async fn handle_get_manifest(name: String, reference: String) -> Response {
-    let root = PathBuf::from(
-        std::env::var("ZARF_INJECTOR_SEED_ROOT").unwrap_or_else(|_| String::from("/zarf-seed")),
-    );
+async fn handle_get_manifest(name: String, reference: String, seed_root: &str) -> Response {
+    let root = PathBuf::from(seed_root);
 
     let index = fs::read_to_string(root.join("index.json")).expect("index.json is read");
     let json: Value = serde_json::from_str(&index).expect("unable to parse index.json");
@@ -233,10 +228,8 @@ async fn handle_get_manifest(name: String, reference: String) -> Response {
 }
 
 /// Handles the GET request for a blob
-async fn handle_get_digest(tag: String) -> Response {
-    let root = PathBuf::from(
-        std::env::var("ZARF_INJECTOR_SEED_ROOT").unwrap_or_else(|_| String::from("/zarf-seed")),
-    );
+async fn handle_get_digest(tag: String, seed_root: &str) -> Response {
+    let root = PathBuf::from(seed_root);
     let blob_root = root.join("blobs").join("sha256");
     let path = blob_root.join(tag.strip_prefix("sha256:").unwrap());
 
@@ -268,11 +261,11 @@ async fn main() {
     println!("unpacking: {}", args[1]);
     let payload_sha = &args[1];
 
-    unpack(payload_sha);
+    unpack(payload_sha, "/zarf-init", "/zarf-seed");
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:5000").await.unwrap();
     println!("listening on {}", listener.local_addr().unwrap());
-    axum::serve(listener, start_seed_registry()).await.unwrap();
+    axum::serve(listener, start_seed_registry("/zarf-seed".to_string())).await.unwrap();
     println!("Usage: {} <sha256sum>", args[1]);
 }
 
@@ -312,18 +305,13 @@ mod test {
             .expect("should have setup the test environment");
 
         let output_root = env.output_dir();
-        unsafe {
-            std::env::set_var("ZARF_INJECTOR_INIT_ROOT", env.input_dir());
-            std::env::set_var("ZARF_INJECTOR_SEED_ROOT", &output_root);
-        }
-        unpack(&env.shasum());
+        unpack(&env.shasum(), &env.input_dir().to_string_lossy(), &output_root.to_string_lossy());
 
         // Assert the files and directory we expect to exist do exist
         assert!(Path::new(&output_root.join("index.json")).exists());
         assert!(Path::new(&output_root.join("manifest.json")).exists());
         assert!(Path::new(&output_root.join("oci-layout")).exists());
         assert!(Path::new(&output_root.join("repositories")).exists());
-        // TODO: Assert all of the blobs referenced in index.json and manifest.json exist under blobs/sha256/...
 
         localize_test_image(TEST_IMAGE, &output_root)
             .expect("should have localized the test image's index.json");
@@ -338,8 +326,8 @@ mod test {
             .port();
 
         // Start registry in the background
-        tokio::spawn(async {
-            let app = start_seed_registry();
+        tokio::spawn(async move {
+            let app = start_seed_registry(output_root.to_string_lossy().to_string());
             axum::serve(listener, app)
                 .await
                 .expect("should have been able to start serving the registry");
