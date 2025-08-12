@@ -6,7 +6,7 @@
 > code src/injector
 > ```
 
-A tiny (<1MiB) binary statically-linked with musl in order to fit as a configmap.
+A tiny (<1MiB) binary statically-linked with [musl](https://musl.libc.org/) in order to fit as a configmap.
 
 See how it gets used during the [`zarf-init`](https://docs.zarf.dev/commands/zarf_init/) process in the ['init' package reference documentation](https://docs.zarf.dev/ref/init-package/).
 
@@ -70,7 +70,7 @@ ARM64 injector: 917512b
 
 ## Testing your injector
 
-Build your injector by following the steps above then run the following the `test` directory: 
+Build your injector by following the steps above then run the following the `test` directory:
 
 ```bash
 zarf package create
