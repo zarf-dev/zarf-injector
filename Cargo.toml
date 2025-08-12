@@ -19,7 +19,7 @@ edition = "2024"
 
 [dependencies]
 glob = "0.3.1"
-flate2 = "1.0.28"
+flate2 = "1.1.2"
 tar = "0.4.40"
 sha2 = "0.10.8"
 hex = {version = "0.4.3", default-features = false}
