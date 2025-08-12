@@ -339,7 +339,7 @@ mod test {
         let output_root = env.output_dir();
         unsafe {
             std::env::set_var("ZARF_INJECTOR_INIT_ROOT", env.input_dir());
-            std::env::set_var("ZARF_INJECTOR_SEED_ROO", &output_root);
+            std::env::set_var("ZARF_INJECTOR_SEED_ROOT", &output_root);
         }
         unpack(&env.shasum());
 
