@@ -292,6 +292,29 @@ mod test {
 
     use crate::{start_seed_registry, unpack};
 
+    struct EnvGuard {
+        key: String,
+    }
+
+    impl EnvGuard {
+        fn new(key: &str, value: &str) -> Self {
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self {
+                key: key.to_string(),
+            }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            unsafe {
+                std::env::remove_var(&self.key);
+            }
+        }
+    }
+
     struct TempDir {
         path: PathBuf,
     }
@@ -334,12 +357,9 @@ mod test {
             .await
             .expect("should have setup the test environment");
 
-        println!("tmpdir is at {:?}", tmpdir.path());
         let output_root = env.output_dir();
-        unsafe {
-            std::env::set_var("ZARF_INJECTOR_INIT_ROOT", env.input_dir());
-            std::env::set_var("ZARF_INJECTOR_SEED_ROOT", &output_root);
-        }
+        let _init_guard = EnvGuard::new("ZARF_INJECTOR_INIT_ROOT", &env.input_dir().to_string_lossy());
+        let _seed_guard = EnvGuard::new("ZARF_INJECTOR_SEED_ROOT", &output_root.to_string_lossy());
         unpack(&env.shasum());
 
         // Assert the files and directory we expect to exist do exist
