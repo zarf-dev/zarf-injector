@@ -303,7 +303,7 @@ mod test {
             Ok(Self { path })
         }
 
-        fn path(&self) -> &PathBuf {
+        fn path(&self) -> &Path {
             &self.path
         }
     }
