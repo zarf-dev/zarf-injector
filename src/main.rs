@@ -330,7 +330,7 @@ mod test {
         // Create a temporary directory that will auto-cleanup on drop
         let tmpdir = TempDir::new().expect("should have created temporary directory");
 
-        let env = TestEnv::new(docker.clone(), TEST_IMAGE, tmpdir.path().clone())
+        let env = TestEnv::new(docker.clone(), TEST_IMAGE, tmpdir.path())
             .await
             .expect("should have setup the test environment");
 
@@ -484,7 +484,7 @@ mod test {
     }
 
     impl TestEnv {
-        async fn new(client: Docker, image: &str, root: PathBuf) -> Result<Self> {
+        async fn new(client: Docker, image: &str, root: &Path) -> Result<Self> {
             // Ensure we have test directories set up
             let input_dir = root.join("zarf-init");
             let output_dir = root.join("zarf-seed");
