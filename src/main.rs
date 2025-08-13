@@ -358,7 +358,10 @@ mod test {
             .expect("should have setup the test environment");
 
         let output_root = env.output_dir();
-        let _init_guard = EnvGuard::new("ZARF_INJECTOR_INIT_ROOT", &env.input_dir().to_string_lossy());
+        let _init_guard = EnvGuard::new(
+            "ZARF_INJECTOR_INIT_ROOT",
+            &env.input_dir().to_string_lossy(),
+        );
         let _seed_guard = EnvGuard::new("ZARF_INJECTOR_SEED_ROOT", &output_root.to_string_lossy());
         unpack(&env.shasum());
 
@@ -387,6 +390,17 @@ mod test {
                 .await
                 .expect("should have been able to start serving the registry");
         });
+
+        // Wait for registry to be ready
+        for _ in 0..10 {
+            if tokio::net::TcpStream::connect(format!("127.0.0.1:{}", random_port))
+                .await
+                .is_ok()
+            {
+                break;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        }
 
         let test_image = TEST_IMAGE.replace("ghcr.io", &format!("127.0.0.1:{random_port}"));
         let options = Some(CreateImageOptions {
