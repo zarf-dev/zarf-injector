@@ -28,3 +28,9 @@ axum = {version = "0.7.5", features = ["tokio"]}
 tokio = { version = "1.42.1", features = ["fs", "rt"] }
 tokio-util = { version = "0.7.10", features = ["io"]}
 regex-lite = "0.1.5"
+
+
+[dev-dependencies]
+anyhow = "1.0.86"
+bollard = "0.17.1"
+futures-util = "0.3.30"
