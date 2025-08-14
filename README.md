@@ -13,8 +13,10 @@ See how it gets used during the [`zarf-init`](https://docs.zarf.dev/commands/zar
 ## What does it do?
 
 ```sh
-zarf-injector <SHA256>
+zarf-injector <SHA256> [bind_address]
 ```
+
+[bind_address] defaults to `0.0.0.0:5000`. A user may want to change it to `[::]:5000` to enable IPv6
 
 The `zarf-injector` binary serves 2 purposes during 'init'.
 
