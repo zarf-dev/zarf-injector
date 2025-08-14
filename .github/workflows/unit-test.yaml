@@ -1,0 +1,16 @@
+name: Unit Test Injector
+
+on:
+  pull_request:
+
+jobs:
+  build-injector:
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout Repo"
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        
+      - name: "Build Rust Binary for x86_64 and arm64"
+        run: |
+          make install-cross
+          make unit-test
