@@ -266,20 +266,14 @@ async fn main() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        println!("Usage: {} <sha256sum> [ipv6_bind]", args[0]);
+        println!("Usage: {} <sha256sum> [bind_address]", args[0]);
         return;
     }
 
     println!("unpacking: {}", args[1]);
     let payload_sha = &args[1];
 
-    // assume IPv4 unless specified
-    let ipv6_bind = args.get(2).map_or(false, |arg| arg == "true");
-    let bind_addr = if ipv6_bind {
-        "[::]:5000"
-    } else {
-        "0.0.0.0:5000"
-    };
+    let bind_addr = args.get(2).map(|s| s.as_str()).unwrap_or("0.0.0.0:5000");
 
     unpack(payload_sha);
 
