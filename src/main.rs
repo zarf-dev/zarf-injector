@@ -207,6 +207,7 @@ async fn handle_get_manifest(name: String, reference: String) -> Response {
                 .and_then(|content| serde_json::from_str::<Value>(&content).ok())
             {
                 Some(file_json) => {
+                    println!("this is the media type: {}", file_json["mediaType"]);
                     media_type_manifest = file_json["mediaType"]
                         .as_str()
                         .unwrap_or(OCI_MIME_TYPE)
@@ -424,8 +425,8 @@ mod test {
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         }
 
-        let registry_addr = image.split('/').next().unwrap_or("ghcr.io");
-        let test_image = image.replace(registry_addr, &format!("127.0.0.1:{random_port}"));
+        let image_name = extract_name(image);
+        let test_image = &format!("127.0.0.1:{random_port}/{image_name}");
         let options = Some(CreateImageOptions {
             from_image: test_image.clone(),
             ..Default::default()
@@ -444,11 +445,7 @@ mod test {
 
     #[tokio::test]
     async fn test_integration() {
-        let test_images = [
-            // "ghcr.io/zarf-dev/doom-game:0.0.1",
-            "alpine/socat:1.8.0.3",
-        ];
-        
+        let test_images = ["ghcr.io/zarf-dev/doom-game:0.0.1", "alpine/socat:1.8.0.3"];
         for image in test_images {
             test_registry(image).await;
         }
