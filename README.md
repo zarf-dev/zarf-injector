@@ -13,7 +13,7 @@ See how it gets used during the [`zarf-init`](https://docs.zarf.dev/commands/zar
 ## What does it do?
 
 ```sh
-zarf-injector <SHA256> [use_ipv6]
+zarf-injector <SHA256> [ipv6_bind]
 ```
 
 The `zarf-injector` binary serves 2 purposes during 'init'.

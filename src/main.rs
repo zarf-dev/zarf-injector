@@ -266,7 +266,7 @@ async fn main() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        println!("Usage: {} <sha256sum> [use_ipv6]", args[0]);
+        println!("Usage: {} <sha256sum> [ipv6_bind]", args[0]);
         return;
     }
 
@@ -274,8 +274,8 @@ async fn main() {
     let payload_sha = &args[1];
 
     // assume IPv4 unless specified
-    let use_ipv6 = args.get(2).map_or(false, |arg| arg == "true");
-    let bind_addr = if use_ipv6 {
+    let ipv6_bind = args.get(2).map_or(false, |arg| arg == "true");
+    let bind_addr = if ipv6_bind {
         "[::]:5000"
     } else {
         "0.0.0.0:5000"
