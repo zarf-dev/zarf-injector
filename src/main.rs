@@ -183,7 +183,6 @@ async fn handle_get_manifest(name: String, reference: String) -> Response {
                 .unwrap();
             let requested_reference = name.to_owned() + ":" + &reference;
             if requested_reference == image_base_name {
-                media_type_manifest = manifest["mediaType"].as_str().unwrap().to_owned();
                 sha_manifest = manifest["digest"]
                     .as_str()
                     .unwrap()
@@ -207,11 +206,11 @@ async fn handle_get_manifest(name: String, reference: String) -> Response {
                 .and_then(|content| serde_json::from_str::<Value>(&content).ok())
             {
                 Some(file_json) => {
-                    println!("this is the media type: {}", file_json["mediaType"]);
                     media_type_manifest = file_json["mediaType"]
                         .as_str()
                         .unwrap_or(OCI_MIME_TYPE)
-                        .to_owned()
+                        .to_owned();
+                    println!("this is the media type: {}", file_json["mediaType"]);
                 }
                 None => {
                     return Response::builder()
@@ -315,7 +314,7 @@ mod test {
         path::{Path, PathBuf},
     };
 
-    use crate::{start_seed_registry, unpack};
+    use crate::{OCI_MIME_TYPE, start_seed_registry, unpack};
 
     struct EnvGuard {
         key: String,
@@ -369,7 +368,7 @@ mod test {
     // https://github.com/oras-project/rust-oci-client/blob/657c1caf9e99ce2184a96aa319fde4f4a8c09439/src/regexp.rs#L3-L5
     const REFERENCE_REGEXP: &str = r"^((?:(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9])(?:(?:\.(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]))+)?(?::[0-9]+)?/)?[a-z0-9]+(?:(?:(?:[._]|__|[-]*)[a-z0-9]+)+)?(?:(?:/[a-z0-9]+(?:(?:(?:[._]|__|[-]*)[a-z0-9]+)+)?)+)?)(?::([\w][\w.-]{0,127}))?(?:@([A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*[:][[:xdigit:]]{32,}))?$";
 
-    async fn test_registry(image: &str) {
+    async fn test_registry(image: &str, media_type: &str) {
         let docker = Docker::connect_with_socket_defaults()
             .expect("should have been able to create a Docker client");
 
@@ -396,6 +395,9 @@ mod test {
 
         localize_test_image(image, &output_root)
             .expect("should have localized the test image's index.json");
+
+        change_manifest_media_type(&output_root, media_type)
+            .expect("should have changed the mediaType of the manifest");
 
         // Use :0 to let the operating system decide the random port to listen on
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -445,9 +447,12 @@ mod test {
 
     #[tokio::test]
     async fn test_integration() {
-        let test_images = ["ghcr.io/zarf-dev/doom-game:0.0.1", "alpine/socat:1.8.0.3"];
+        let test_images = [
+            OCI_MIME_TYPE,
+            "application/vnd.docker.distribution.manifest.v2+json",
+        ];
         for image in test_images {
-            test_registry(image).await;
+            test_registry("ghcr.io/zarf-dev/doom-game:0.0.1", image).await;
         }
     }
 
@@ -486,6 +491,46 @@ mod test {
         index_file.rewind().unwrap();
         serde_json::to_writer(index_file.try_clone().unwrap(), &index_json)
             .context("should have overwrote index.json")?;
+        Ok(())
+    }
+
+    // Changes the mediaType in the manifest file
+    fn change_manifest_media_type(output_root: &Path, new_media_type: &str) -> Result<()> {
+        // Read the index.json to get the manifest digest
+        let index_file =
+            File::open(output_root.join("index.json")).context("should have opened index.json")?;
+
+        let index_json: serde_json::Value =
+            serde_json::from_reader(index_file).context("should have read index.json")?;
+
+        // Get the digest from manifests[0]
+        let sha_manifest = index_json["manifests"][0]["digest"]
+            .as_str()
+            .context("should have found digest in manifest")?
+            .strip_prefix("sha256:")
+            .context("should have stripped sha256: prefix")?;
+
+        // Open the manifest file
+        let manifest_path = output_root.join("blobs").join("sha256").join(sha_manifest);
+        let mut manifest_file = File::options()
+            .read(true)
+            .write(true)
+            .open(&manifest_path)
+            .context("should have opened manifest file")?;
+
+        // Read and parse the manifest
+        let mut manifest_json: serde_json::Value =
+            serde_json::from_reader(manifest_file.try_clone().unwrap())
+                .context("should have read manifest.json")?;
+
+        // Change the mediaType
+        manifest_json["mediaType"] = new_media_type.into();
+
+        // Rewind and write back
+        manifest_file.rewind().unwrap();
+        serde_json::to_writer(manifest_file, &manifest_json)
+            .context("should have written updated manifest")?;
+
         Ok(())
     }
 
