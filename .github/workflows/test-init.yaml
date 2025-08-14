@@ -62,6 +62,7 @@ jobs:
       - name: "Build Zarf package"
         run: |
           cd test
+          zarf version
           zarf package create
       
       - name: "Run zarf init"
