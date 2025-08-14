@@ -361,7 +361,6 @@ mod test {
         }
     }
 
-    const TEST_IMAGE: &str = "ghcr.io/zarf-dev/doom-game:0.0.1";
     // Split gzip into 1024 * 768 kb chunks
     const CHUNK_SIZE: usize = 1024 * 768;
     const ZARF_PAYLOAD_PREFIX: &str = "zarf-payload";
@@ -369,15 +368,14 @@ mod test {
     // https://github.com/oras-project/rust-oci-client/blob/657c1caf9e99ce2184a96aa319fde4f4a8c09439/src/regexp.rs#L3-L5
     const REFERENCE_REGEXP: &str = r"^((?:(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9])(?:(?:\.(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]))+)?(?::[0-9]+)?/)?[a-z0-9]+(?:(?:(?:[._]|__|[-]*)[a-z0-9]+)+)?(?:(?:/[a-z0-9]+(?:(?:(?:[._]|__|[-]*)[a-z0-9]+)+)?)+)?)(?::([\w][\w.-]{0,127}))?(?:@([A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*[:][[:xdigit:]]{32,}))?$";
 
-    #[tokio::test]
-    async fn test_integration() {
+    async fn test_registry(image: &str) {
         let docker = Docker::connect_with_socket_defaults()
             .expect("should have been able to create a Docker client");
 
         // Create a temporary directory that will auto-cleanup on drop
         let tmpdir = TempDir::new().expect("should have created temporary directory");
 
-        let env = TestEnv::new(docker.clone(), TEST_IMAGE, tmpdir.path())
+        let env = TestEnv::new(docker.clone(), image, tmpdir.path())
             .await
             .expect("should have setup the test environment");
 
@@ -395,7 +393,7 @@ mod test {
         assert!(Path::new(&output_root.join("oci-layout")).exists());
         assert!(Path::new(&output_root.join("repositories")).exists());
 
-        localize_test_image(TEST_IMAGE, &output_root)
+        localize_test_image(image, &output_root)
             .expect("should have localized the test image's index.json");
 
         // Use :0 to let the operating system decide the random port to listen on
@@ -426,7 +424,8 @@ mod test {
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         }
 
-        let test_image = TEST_IMAGE.replace("ghcr.io", &format!("127.0.0.1:{random_port}"));
+        let registry_addr = image.split('/').next().unwrap_or("ghcr.io");
+        let test_image = image.replace(registry_addr, &format!("127.0.0.1:{random_port}"));
         let options = Some(CreateImageOptions {
             from_image: test_image.clone(),
             ..Default::default()
@@ -441,6 +440,18 @@ mod test {
             .remove_image(&test_image, None, None)
             .await
             .expect("should have cleaned up the pulled test image");
+    }
+
+    #[tokio::test]
+    async fn test_integration() {
+        let test_images = [
+            // "ghcr.io/zarf-dev/doom-game:0.0.1",
+            "alpine/socat:1.8.0.3",
+        ];
+        
+        for image in test_images {
+            test_registry(image).await;
+        }
     }
 
     // This localizes the test image's index.json such that the registry server
