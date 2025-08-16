@@ -1,15 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2021-Present The Zarf Authors
 
-
-[profile.release]
-opt-level = "z"   # Optimize for size.
-lto = true
-codegen-units = 1
-panic = "abort"
-strip = true
-
-
 [package]
 name = "zarf-injector"
 version = "0.1.0"
@@ -33,3 +24,10 @@ regex-lite = "0.1.5"
 anyhow = "1.0.86"
 bollard = "0.17.1"
 futures-util = "0.3.30"
+
+[profile.release]
+opt-level = "z"   # Optimize for size.
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
