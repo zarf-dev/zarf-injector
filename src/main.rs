@@ -18,7 +18,6 @@ use axum::{
     routing::get,
 };
 use flate2::read::GzDecoder;
-use glob::glob;
 use hex::ToHex;
 use regex_lite::Regex;
 use serde_json::Value;
@@ -67,12 +66,22 @@ fn unpack(sha_sum: &String) {
     let seed_root =
         std::env::var("ZARF_INJECTOR_SEED_ROOT").unwrap_or_else(|_| String::from("/zarf-seed"));
     // get the list of file matches to merge
-    let glob_path = format!("{}/zarf-payload-*", init_root);
-    let file_partials: Result<Vec<_>, _> = glob(&glob_path)
-        .expect("Failed to read glob pattern")
+    let entries = std::fs::read_dir(init_root).expect("failed to read from init directory");
+    let mut file_partials: Vec<PathBuf> = entries
+        // Filter out any entries that were errors
+        .filter_map(|entry| entry.ok())
+        // Check that the entry is a file
+        .filter(|entry| entry.metadata().is_ok_and(|e| e.is_file()))
+        // Check that the entry's file name starts with zarf-injector-
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with("zarf-payload-"))
+        })
+        // Turn each entry in to a file path
+        .map(|entry| entry.path())
         .collect();
-
-    let mut file_partials = file_partials.unwrap();
 
     // ensure a default sort-order
     file_partials.sort();
@@ -265,15 +274,21 @@ async fn handle_get_digest(tag: String) -> Response {
 async fn main() {
     let args: Vec<String> = env::args().collect();
 
+    if args.len() < 2 {
+        println!("Usage: {} <sha256sum> [bind_address]", args[0]);
+        return;
+    }
+
     println!("unpacking: {}", args[1]);
     let payload_sha = &args[1];
 
+    let bind_addr = args.get(2).map(|s| s.as_str()).unwrap_or("0.0.0.0:5000");
+
     unpack(payload_sha);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:5000").await.unwrap();
+    let listener = tokio::net::TcpListener::bind(bind_addr).await.unwrap();
     println!("listening on {}", listener.local_addr().unwrap());
     axum::serve(listener, start_seed_registry()).await.unwrap();
-    println!("Usage: {} <sha256sum>", args[1]);
 }
 
 #[cfg(test)]
