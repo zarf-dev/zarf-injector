@@ -265,15 +265,21 @@ async fn handle_get_digest(tag: String) -> Response {
 async fn main() {
     let args: Vec<String> = env::args().collect();
 
+    if args.len() < 2 {
+        println!("Usage: {} <sha256sum> [bind_address]", args[0]);
+        return;
+    }
+
     println!("unpacking: {}", args[1]);
     let payload_sha = &args[1];
 
+    let bind_addr = args.get(2).map(|s| s.as_str()).unwrap_or("0.0.0.0:5000");
+
     unpack(payload_sha);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:5000").await.unwrap();
+    let listener = tokio::net::TcpListener::bind(bind_addr).await.unwrap();
     println!("listening on {}", listener.local_addr().unwrap());
     axum::serve(listener, start_seed_registry()).await.unwrap();
-    println!("Usage: {} <sha256sum>", args[1]);
 }
 
 #[cfg(test)]
