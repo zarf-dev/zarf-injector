@@ -5,6 +5,6 @@ updates:
     schedule:
       interval: weekly
     groups:
-      github-actions:
+      actions-organization:
         patterns:
           - "actions/*"
