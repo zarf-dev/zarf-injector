@@ -16,8 +16,17 @@ help: ## Display this help information
 clean: ## Clean the build directory
 	rm -rf target
 
+install-rust: ## Install Rust via rustup
+	curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+
+install-targets: ## Add required Rust targets
+	rustup target add x86_64-unknown-linux-musl
+	rustup target add aarch64-unknown-linux-musl
+
 install-cross: ## installs cross
 	cargo install cross --git https://github.com/cross-rs/cross
+
+setup: install-rust install-targets install-cross ## Install all dependencies
 
 injector: injector-amd injector-arm ## Builds the injector for both platforms
 
@@ -42,10 +51,8 @@ unit-test: ## Run cargo tests
 	cargo test 	
 
 target/x86_64-unknown-linux-musl/release/zarf-injector: src/main.rs Cargo.toml
-	rustup target add x86_64-unknown-linux-musl
 	cross build --target x86_64-unknown-linux-musl --release
 
 target/aarch64-unknown-linux-musl/release/zarf-injector: src/main.rs Cargo.toml
-	rustup target add aarch64-unknown-linux-musl
 	cross build --target aarch64-unknown-linux-musl --release
 
