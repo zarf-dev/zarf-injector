@@ -20,7 +20,7 @@ regex-lite = "0.1.5"
 
 [dev-dependencies]
 anyhow = "1.0.86"
-bollard = "0.17.1"
+bollard = "0.19.1"
 futures-util = "0.3.30"
 
 [profile.release]
