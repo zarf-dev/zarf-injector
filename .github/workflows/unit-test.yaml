@@ -12,5 +12,5 @@ jobs:
         
       - name: "Build Rust Binary for x86_64 and arm64"
         run: |
-          make install-cross
+          make setup
           make unit-test
