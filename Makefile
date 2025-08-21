@@ -1,6 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2021-Present The Zarf Authors
 
+ifeq ($(shell stat --help >/dev/null 2>&1; echo $$?), 0)
+  stat_format = "-c%s"
+else
+  stat_format = "-f%z"
+endif
+
 .PHONY: help
 help: ## Display this help information
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -21,8 +27,8 @@ injector-arm: target/aarch64-unknown-linux-musl/release/zarf-injector ## builds 
 
 check-size: injector ## Validate that both injector binaries are under 1 MiB
 	@max_size=1048576; \
-	amd_size=$$(stat -c%s target/x86_64-unknown-linux-musl/release/zarf-injector); \
-	arm_size=$$(stat -c%s target/aarch64-unknown-linux-musl/release/zarf-injector); \
+	amd_size=$$(stat $(stat_format) target/x86_64-unknown-linux-musl/release/zarf-injector); \
+	arm_size=$$(stat $(stat_format) target/aarch64-unknown-linux-musl/release/zarf-injector); \
 	echo "Injector sizes: "; \
 	echo "AMD64 injector: $${amd_size}b"; \
 	echo "ARM64 injector: $${arm_size}b"; \
