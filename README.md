@@ -1,11 +1,5 @@
 # zarf-injector
 
-> If using VSCode w/ the official Rust extension, make sure to open a new window in the `src/injector` directory to make `rust-analyzer` happy.
->
-> ```bash
-> code src/injector
-> ```
-
 A tiny (<1MiB) binary statically-linked with [musl](https://musl.libc.org/) in order to fit as a configmap.
 
 See how it gets used during the [`zarf-init`](https://docs.zarf.dev/commands/zarf_init/) process in the ['init' package reference documentation](https://docs.zarf.dev/ref/init-package/).
