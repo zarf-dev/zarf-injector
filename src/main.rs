@@ -279,6 +279,24 @@ async fn main() {
         return;
     }
 
+    // Setup graceful shutdown handler
+    let shutdown_signal = async {
+        // Wait for SIGTERM (Kubernetes sends this)
+        let mut sigterm =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).unwrap();
+        let mut sigint =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()).unwrap();
+
+        tokio::select! {
+            _ = sigterm.recv() => {
+                println!("Received SIGTERM, shutting down gracefully...");
+            }
+            _ = sigint.recv() => {
+                println!("Received SIGINT, shutting down gracefully...");
+            }
+        }
+    };
+
     println!("unpacking: {}", args[1]);
     let payload_sha = &args[1];
 
@@ -288,7 +306,10 @@ async fn main() {
 
     let listener = tokio::net::TcpListener::bind(bind_addr).await.unwrap();
     println!("listening on {}", listener.local_addr().unwrap());
-    axum::serve(listener, start_seed_registry()).await.unwrap();
+    axum::serve(listener, start_seed_registry())
+        .with_graceful_shutdown(shutdown_signal)
+        .await
+        .unwrap();
 }
 
 #[cfg(test)]
