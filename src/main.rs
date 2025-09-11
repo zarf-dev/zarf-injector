@@ -217,7 +217,6 @@ async fn handle_get_manifest(name: String, reference: String) -> Response {
                     .as_str()
                     .unwrap_or(OCI_MIME_TYPE)
                     .to_owned();
-                println!("this is the media type: {}", file_json["mediaType"]);
                 media_type
             }
             None => {
@@ -377,9 +376,18 @@ mod test {
     // Split gzip into 1024 * 768 kb chunks
     const CHUNK_SIZE: usize = 1024 * 768;
     const ZARF_PAYLOAD_PREFIX: &str = "zarf-payload";
+    const DOCKER_MEDIA_TYPE: &str = "application/vnd.docker.distribution.manifest.v2+json";
     // Based on upstream rust-oci-client regex:
     // https://github.com/oras-project/rust-oci-client/blob/657c1caf9e99ce2184a96aa319fde4f4a8c09439/src/regexp.rs#L3-L5
     const REFERENCE_REGEXP: &str = r"^((?:(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9])(?:(?:\.(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]))+)?(?::[0-9]+)?/)?[a-z0-9]+(?:(?:(?:[._]|__|[-]*)[a-z0-9]+)+)?(?:(?:/[a-z0-9]+(?:(?:(?:[._]|__|[-]*)[a-z0-9]+)+)?)+)?)(?::([\w][\w.-]{0,127}))?(?:@([A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*[:][[:xdigit:]]{32,}))?$";
+
+    #[tokio::test]
+    async fn test_integration() {
+        let media_types = [OCI_MIME_TYPE, DOCKER_MEDIA_TYPE];
+        for media_type in media_types {
+            test_registry("ghcr.io/zarf-dev/doom-game:0.0.1", media_type).await;
+        }
+    }
 
     async fn test_registry(image: &str, media_type: &str) {
         let docker = Docker::connect_with_socket_defaults()
@@ -456,17 +464,6 @@ mod test {
             .remove_image(&test_image, None, None)
             .await
             .expect("should have cleaned up the pulled test image");
-    }
-
-    #[tokio::test]
-    async fn test_integration() {
-        let media_types = [
-            OCI_MIME_TYPE,
-            "application/vnd.docker.distribution.manifest.v2+json",
-        ];
-        for media_type in media_types {
-            test_registry("ghcr.io/zarf-dev/doom-game:0.0.1", media_type).await;
-        }
     }
 
     // This localizes the test image's index.json such that the registry server
