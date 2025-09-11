@@ -208,18 +208,21 @@ async fn handle_get_manifest(name: String, reference: String) -> Response {
             .into_response()
     } else {
         let file_path = root.join("blobs").join("sha256").join(&sha_manifest);
-        let media_type_manifest = match fs::read_to_string(&file_path)
-            .ok()
-            .and_then(|content| serde_json::from_str::<Value>(&content).ok())
-        {
-            Some(file_json) => {
-                let media_type = file_json["mediaType"]
+        let media_type_manifest = match fs::read_to_string(&file_path) {
+            Ok(content) => match serde_json::from_str::<Value>(&content) {
+                Ok(file_json) => file_json["mediaType"]
                     .as_str()
                     .unwrap_or(OCI_MIME_TYPE)
-                    .to_owned();
-                media_type
-            }
-            None => {
+                    .to_owned(),
+                Err(_) => {
+                    return Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body("Invalid manifest format".to_string())
+                        .unwrap()
+                        .into_response();
+                }
+            },
+            Err(_) => {
                 return Response::builder()
                     .status(StatusCode::NOT_FOUND)
                     .body("Not Found".to_string())
@@ -227,7 +230,6 @@ async fn handle_get_manifest(name: String, reference: String) -> Response {
                     .into_response();
             }
         };
-
         match tokio::fs::File::open(&file_path).await {
             Ok(file) => {
                 let metadata = match file.metadata().await {
