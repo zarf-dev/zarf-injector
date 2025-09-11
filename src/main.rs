@@ -180,7 +180,6 @@ async fn handle_get_manifest(name: String, reference: String) -> Response {
     let index = fs::read_to_string(root.join("index.json")).expect("index.json is read");
     let json: Value = serde_json::from_str(&index).expect("unable to parse index.json");
 
-    let mut media_type_manifest: String = "".to_owned();
     let mut sha_manifest: String = "".to_owned();
 
     if reference.starts_with("sha256:") {
@@ -209,27 +208,26 @@ async fn handle_get_manifest(name: String, reference: String) -> Response {
             .into_response()
     } else {
         let file_path = root.join("blobs").join("sha256").join(&sha_manifest);
-        if media_type_manifest.is_empty() {
-            match fs::read_to_string(file_path.clone())
-                .ok()
-                .and_then(|content| serde_json::from_str::<Value>(&content).ok())
-            {
-                Some(file_json) => {
-                    media_type_manifest = file_json["mediaType"]
-                        .as_str()
-                        .unwrap_or(OCI_MIME_TYPE)
-                        .to_owned();
-                    println!("this is the media type: {}", file_json["mediaType"]);
-                }
-                None => {
-                    return Response::builder()
-                        .status(StatusCode::NOT_FOUND)
-                        .body("Not Found".to_string())
-                        .unwrap()
-                        .into_response();
-                }
+        let media_type_manifest = match fs::read_to_string(file_path.clone())
+            .ok()
+            .and_then(|content| serde_json::from_str::<Value>(&content).ok())
+        {
+            Some(file_json) => {
+                let media_type = file_json["mediaType"]
+                    .as_str()
+                    .unwrap_or(OCI_MIME_TYPE)
+                    .to_owned();
+                println!("this is the media type: {}", file_json["mediaType"]);
+                media_type
             }
-        }
+            None => {
+                return Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .body("Not Found".to_string())
+                    .unwrap()
+                    .into_response();
+            }
+        };
 
         match tokio::fs::File::open(&file_path).await {
             Ok(file) => {
@@ -462,12 +460,12 @@ mod test {
 
     #[tokio::test]
     async fn test_integration() {
-        let test_images = [
+        let media_types = [
             OCI_MIME_TYPE,
             "application/vnd.docker.distribution.manifest.v2+json",
         ];
-        for image in test_images {
-            test_registry("ghcr.io/zarf-dev/doom-game:0.0.1", image).await;
+        for media_type in media_types {
+            test_registry("ghcr.io/zarf-dev/doom-game:0.0.1", media_type).await;
         }
     }
 
