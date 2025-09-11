@@ -12,7 +12,7 @@ jobs:
 
       - name: "Build injector"
         run: |
-          make install-cross
+          make setup
           make injector
 
       - name: "Upload injector artifacts"
