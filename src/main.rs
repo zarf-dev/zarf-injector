@@ -208,7 +208,7 @@ async fn handle_get_manifest(name: String, reference: String) -> Response {
             .into_response()
     } else {
         let file_path = root.join("blobs").join("sha256").join(&sha_manifest);
-        let media_type_manifest = match fs::read_to_string(file_path.clone())
+        let media_type_manifest = match fs::read_to_string(&file_path)
             .ok()
             .and_then(|content| serde_json::from_str::<Value>(&content).ok())
         {
