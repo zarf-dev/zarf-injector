@@ -25,6 +25,7 @@ use sha2::{Digest, Sha256};
 use tar::Archive;
 use tokio_util::io::ReaderStream;
 const OCI_MIME_TYPE: &str = "application/vnd.oci.image.manifest.v1+json";
+const ZARF_SEED_DIR: &str = "/zarf-seed";
 
 // Reads the binary contents of a file
 fn get_file(path: &PathBuf) -> io::Result<Vec<u8>> {
@@ -64,7 +65,7 @@ fn unpack(sha_sum: &String) {
     let init_root =
         std::env::var("ZARF_INJECTOR_INIT_ROOT").unwrap_or_else(|_| String::from("/zarf-init"));
     let seed_root =
-        std::env::var("ZARF_INJECTOR_SEED_ROOT").unwrap_or_else(|_| String::from("/zarf-seed"));
+        std::env::var("ZARF_INJECTOR_SEED_ROOT").unwrap_or_else(|_| String::from(ZARF_SEED_DIR));
     // get the list of file matches to merge
     let entries = std::fs::read_dir(init_root).expect("failed to read from init directory");
     let mut file_partials: Vec<PathBuf> = entries
@@ -173,7 +174,7 @@ async fn handler(Path(path): Path<String>) -> Response {
 /// Handles the GET request for the manifest (only returns a OCI manifest regardless of Accept header)
 async fn handle_get_manifest(name: String, reference: String) -> Response {
     let root = PathBuf::from(
-        std::env::var("ZARF_INJECTOR_SEED_ROOT").unwrap_or_else(|_| String::from("/zarf-seed")),
+        std::env::var("ZARF_INJECTOR_SEED_ROOT").unwrap_or_else(|_| String::from(ZARF_SEED_DIR)),
     );
 
     let index = fs::read_to_string(root.join("index.json")).expect("index.json is read");
@@ -207,6 +208,28 @@ async fn handle_get_manifest(name: String, reference: String) -> Response {
             .into_response()
     } else {
         let file_path = root.join("blobs").join("sha256").join(&sha_manifest);
+        let media_type_manifest = match fs::read_to_string(&file_path) {
+            Ok(content) => match serde_json::from_str::<Value>(&content) {
+                Ok(file_json) => file_json["mediaType"]
+                    .as_str()
+                    .unwrap_or(OCI_MIME_TYPE)
+                    .to_owned(),
+                Err(_) => {
+                    return Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body("Invalid manifest format".to_string())
+                        .unwrap()
+                        .into_response();
+                }
+            },
+            Err(_) => {
+                return Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .body("Not Found".to_string())
+                    .unwrap()
+                    .into_response();
+            }
+        };
         match tokio::fs::File::open(&file_path).await {
             Ok(file) => {
                 let metadata = match file.metadata().await {
@@ -221,7 +244,7 @@ async fn handle_get_manifest(name: String, reference: String) -> Response {
                 let stream = ReaderStream::new(file);
                 Response::builder()
                     .status(StatusCode::OK)
-                    .header("Content-Type", OCI_MIME_TYPE)
+                    .header("Content-Type", media_type_manifest)
                     .header("Content-Length", metadata.len())
                     .header(
                         "Docker-Content-Digest",
@@ -244,7 +267,7 @@ async fn handle_get_manifest(name: String, reference: String) -> Response {
 /// Handles the GET request for a blob
 async fn handle_get_digest(tag: String) -> Response {
     let root = PathBuf::from(
-        std::env::var("ZARF_INJECTOR_SEED_ROOT").unwrap_or_else(|_| String::from("/zarf-seed")),
+        std::env::var("ZARF_INJECTOR_SEED_ROOT").unwrap_or_else(|_| String::from(ZARF_SEED_DIR)),
     );
     let blob_root = root.join("blobs").join("sha256");
     let path = blob_root.join(tag.strip_prefix("sha256:").unwrap());
@@ -305,7 +328,7 @@ mod test {
         path::{Path, PathBuf},
     };
 
-    use crate::{start_seed_registry, unpack};
+    use crate::{OCI_MIME_TYPE, start_seed_registry, unpack};
 
     struct EnvGuard {
         key: String,
@@ -352,23 +375,30 @@ mod test {
         }
     }
 
-    const TEST_IMAGE: &str = "ghcr.io/zarf-dev/doom-game:0.0.1";
     // Split gzip into 1024 * 768 kb chunks
     const CHUNK_SIZE: usize = 1024 * 768;
     const ZARF_PAYLOAD_PREFIX: &str = "zarf-payload";
+    const DOCKER_MEDIA_TYPE: &str = "application/vnd.docker.distribution.manifest.v2+json";
     // Based on upstream rust-oci-client regex:
     // https://github.com/oras-project/rust-oci-client/blob/657c1caf9e99ce2184a96aa319fde4f4a8c09439/src/regexp.rs#L3-L5
     const REFERENCE_REGEXP: &str = r"^((?:(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9])(?:(?:\.(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]))+)?(?::[0-9]+)?/)?[a-z0-9]+(?:(?:(?:[._]|__|[-]*)[a-z0-9]+)+)?(?:(?:/[a-z0-9]+(?:(?:(?:[._]|__|[-]*)[a-z0-9]+)+)?)+)?)(?::([\w][\w.-]{0,127}))?(?:@([A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*[:][[:xdigit:]]{32,}))?$";
 
     #[tokio::test]
     async fn test_integration() {
+        let media_types = [OCI_MIME_TYPE, DOCKER_MEDIA_TYPE];
+        for media_type in media_types {
+            test_registry("ghcr.io/zarf-dev/doom-game:0.0.1", media_type).await;
+        }
+    }
+
+    async fn test_registry(image: &str, media_type: &str) {
         let docker = Docker::connect_with_socket_defaults()
             .expect("should have been able to create a Docker client");
 
         // Create a temporary directory that will auto-cleanup on drop
         let tmpdir = TempDir::new().expect("should have created temporary directory");
 
-        let env = TestEnv::new(docker.clone(), TEST_IMAGE, tmpdir.path())
+        let env = TestEnv::new(docker.clone(), image, tmpdir.path())
             .await
             .expect("should have setup the test environment");
 
@@ -386,8 +416,11 @@ mod test {
         assert!(Path::new(&output_root.join("oci-layout")).exists());
         assert!(Path::new(&output_root.join("repositories")).exists());
 
-        localize_test_image(TEST_IMAGE, &output_root)
+        localize_test_image(image, &output_root)
             .expect("should have localized the test image's index.json");
+
+        change_manifest_media_type(&output_root, media_type)
+            .expect("should have changed the mediaType of the manifest");
 
         // Use :0 to let the operating system decide the random port to listen on
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -417,7 +450,8 @@ mod test {
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         }
 
-        let test_image = TEST_IMAGE.replace("ghcr.io", &format!("127.0.0.1:{random_port}"));
+        let image_name = extract_name(image);
+        let test_image = &format!("127.0.0.1:{random_port}/{image_name}");
         let options = Some(CreateImageOptions {
             from_image: test_image.clone(),
             ..Default::default()
@@ -469,6 +503,46 @@ mod test {
         index_file.rewind().unwrap();
         serde_json::to_writer(index_file.try_clone().unwrap(), &index_json)
             .context("should have overwrote index.json")?;
+        Ok(())
+    }
+
+    // Changes the mediaType in the manifest file
+    fn change_manifest_media_type(output_root: &Path, new_media_type: &str) -> Result<()> {
+        // Read the index.json to get the manifest digest
+        let index_file =
+            File::open(output_root.join("index.json")).context("should have opened index.json")?;
+
+        let index_json: serde_json::Value =
+            serde_json::from_reader(index_file).context("should have read index.json")?;
+
+        // Get the digest from manifests[0]
+        let sha_manifest = index_json["manifests"][0]["digest"]
+            .as_str()
+            .context("should have found digest in manifest")?
+            .strip_prefix("sha256:")
+            .context("should have stripped sha256: prefix")?;
+
+        // Open the manifest file
+        let manifest_path = output_root.join("blobs").join("sha256").join(sha_manifest);
+        let mut manifest_file = File::options()
+            .read(true)
+            .write(true)
+            .open(&manifest_path)
+            .context("should have opened manifest file")?;
+
+        // Read and parse the manifest
+        let mut manifest_json: serde_json::Value =
+            serde_json::from_reader(manifest_file.try_clone().unwrap())
+                .context("should have read manifest.json")?;
+
+        // Change the mediaType
+        manifest_json["mediaType"] = new_media_type.into();
+
+        // Rewind and write back
+        manifest_file.rewind().unwrap();
+        serde_json::to_writer(manifest_file, &manifest_json)
+            .context("should have written updated manifest")?;
+
         Ok(())
     }
 
