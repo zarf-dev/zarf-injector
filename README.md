@@ -72,3 +72,7 @@ Build your injector by following the steps above then run the following the `tes
 zarf package create
 zarf init --confirm
 ```
+
+## Automatic dependency updates
+
+Dependabot automatically creates pull requests to the zarf-injector repository if there is a security vulnerability in one of our dependencies. Aside from these updates, this repo does not a system to automatically update cargo dependencies. The injector is small and simple and therefore unlikely to see a practical improvement from a dependency update. Additionally, consistently updating the dependencies could inch us closer to the 1MiB limit. Ensuring we have some leeway from the limit makes it easier to update the injector in the event of a security vulnerability or additional required feature.
