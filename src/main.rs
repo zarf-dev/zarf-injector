@@ -12,8 +12,8 @@ use std::path::PathBuf;
 use axum::{
     Router,
     body::Body,
-    extract::Path,
-    http::StatusCode,
+    extract::{Path, Request},
+    http::{StatusCode, HeaderMap},
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -119,7 +119,11 @@ fn start_seed_registry() -> Router {
     // The name and reference parameter identify the image
     // The reference may include a tag or digest.
     Router::new()
-        .route("/v2/*path", get(handler))
+        .route("/v2/*path", get(handler)
+            .put(put_handler)
+            .head(head_handler)
+            .post(post_handler)
+            .patch(patch_handler))
         .route(
             "/v2/",
             get(|| async {
@@ -180,9 +184,19 @@ async fn handle_get_manifest(name: String, reference: String) -> Response {
     let json: Value = serde_json::from_str(&index).expect("unable to parse index.json");
 
     let mut sha_manifest: String = "".to_owned();
+    let mut media_type = OCI_MIME_TYPE.to_string();
 
     if reference.starts_with("sha256:") {
         sha_manifest = reference.strip_prefix("sha256:").unwrap().to_owned();
+        // Find media type from index
+        for manifest in json["manifests"].as_array().unwrap_or(&vec![]) {
+            if let Some(digest) = manifest["digest"].as_str() {
+                if digest == format!("sha256:{}", sha_manifest) {
+                    media_type = manifest["mediaType"].as_str().unwrap_or(OCI_MIME_TYPE).to_string();
+                    break;
+                }
+            }
+        }
     } else {
         for manifest in json["manifests"].as_array().unwrap() {
             let image_base_name = manifest["annotations"]["org.opencontainers.image.base.name"]
@@ -196,6 +210,8 @@ async fn handle_get_manifest(name: String, reference: String) -> Response {
                     .strip_prefix("sha256:")
                     .unwrap()
                     .to_owned();
+                media_type = manifest["mediaType"].as_str().unwrap_or(OCI_MIME_TYPE).to_string();
+                break;
             }
         }
     }
@@ -221,7 +237,7 @@ async fn handle_get_manifest(name: String, reference: String) -> Response {
                 let stream = ReaderStream::new(file);
                 Response::builder()
                     .status(StatusCode::OK)
-                    .header("Content-Type", OCI_MIME_TYPE)
+                    .header("Content-Type", media_type)
                     .header("Content-Length", metadata.len())
                     .header(
                         "Docker-Content-Digest",
@@ -268,6 +284,448 @@ async fn handle_get_digest(tag: String) -> Response {
             .unwrap()
             .into_response(),
     }
+}
+
+async fn put_handler(Path(path): Path<String>, headers: HeaderMap, request: Request) -> Response {
+    let query_string = request.uri().query().unwrap_or("");
+    println!("PUT request: {} query: {}", path, query_string);
+    let manifest_re = Regex::new("(.+)/manifests/(.+)").unwrap();
+    let blob_re = Regex::new("(.+)/blobs/uploads/(.+)").unwrap();
+
+    if manifest_re.is_match(&path) {
+        let caps = manifest_re.captures(&path).unwrap();
+        let name = caps.get(1).unwrap().as_str().to_string();
+        let reference = caps.get(2).unwrap().as_str().to_string();
+        handle_put_manifest(name, reference, headers, request).await
+    } else if blob_re.is_match(&path) {
+        let caps = blob_re.captures(&path).unwrap();
+        let upload_id = caps.get(2).unwrap().as_str().to_string();
+        handle_put_blob(upload_id, headers, query_string.to_string(), request).await
+    } else {
+        Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body("Not Found".to_string())
+            .unwrap()
+            .into_response()
+    }
+}
+
+async fn post_handler(Path(path): Path<String>) -> Response {
+    println!("POST request: {}", path);
+    let blob_upload_re = Regex::new("(.+)/blobs/uploads/?$").unwrap();
+
+    if blob_upload_re.is_match(&path) {
+        handle_post_blob_upload(path).await
+    } else {
+        Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body("Not Found".to_string())
+            .unwrap()
+            .into_response()
+    }
+}
+
+async fn head_handler(Path(path): Path<String>) -> Response {
+    println!("HEAD request: {}", path);
+    let manifest_re = Regex::new("(.+)/manifests/(.+)").unwrap();
+    let blob_re = Regex::new(".+/blobs/(.+)").unwrap();
+
+    if manifest_re.is_match(&path) {
+        let caps = manifest_re.captures(&path).unwrap();
+        let name = caps.get(1).unwrap().as_str().to_string();
+        let reference = caps.get(2).unwrap().as_str().to_string();
+        handle_head_manifest(name, reference).await
+    } else if blob_re.is_match(&path) {
+        let caps = blob_re.captures(&path).unwrap();
+        let digest = caps.get(1).unwrap().as_str().to_string();
+        handle_head_blob(digest).await
+    } else {
+        Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(Body::empty())
+            .unwrap()
+    }
+}
+
+async fn patch_handler(Path(path): Path<String>, request: Request) -> Response {
+    println!("PATCH request: {}", path);
+    let blob_re = Regex::new("(.+)/blobs/uploads/(.+)").unwrap();
+
+    if blob_re.is_match(&path) {
+        let caps = blob_re.captures(&path).unwrap();
+        let upload_id = caps.get(2).unwrap().as_str().to_string();
+        handle_patch_blob(upload_id, request).await
+    } else {
+        Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body("Not Found".to_string())
+            .unwrap()
+            .into_response()
+    }
+}
+
+async fn handle_put_manifest(name: String, reference: String, headers: HeaderMap, request: Request) -> Response {
+    let root = PathBuf::from(
+        std::env::var("ZARF_INJECTOR_SEED_ROOT").unwrap_or_else(|_| String::from("/zarf-seed")),
+    );
+
+    // Read the body
+    let body_bytes = match axum::body::to_bytes(request.into_body(), usize::MAX).await {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body("Failed to read body".into())
+                .unwrap();
+        }
+    };
+
+    // Calculate digest
+    let mut hasher = Sha256::new();
+    hasher.update(&body_bytes);
+    let digest = hasher.finalize();
+    let digest_str = format!("sha256:{}", digest.encode_hex::<String>());
+
+    // Verify digest if provided
+    if let Some(expected_digest) = headers.get("Docker-Content-Digest") {
+        if expected_digest.to_str().unwrap() != digest_str {
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body("Digest mismatch".into())
+                .unwrap();
+        }
+    }
+
+    // Write manifest to blobs
+    let blob_path = root.join("blobs").join("sha256").join(digest_str.strip_prefix("sha256:").unwrap());
+    if let Err(_) = tokio::fs::create_dir_all(blob_path.parent().unwrap()).await {
+        return Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body("Failed to create directory".into())
+            .unwrap();
+    }
+
+    if let Err(_) = tokio::fs::write(&blob_path, &body_bytes).await {
+        return Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body("Failed to write manifest".into())
+            .unwrap();
+    }
+
+    // Update index.json
+    let index_path = root.join("index.json");
+    let mut index: Value = match tokio::fs::read_to_string(&index_path).await {
+        Ok(content) => serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({
+            "schemaVersion": 2,
+            "manifests": []
+        })),
+        Err(_) => serde_json::json!({
+            "schemaVersion": 2,
+            "manifests": []
+        }),
+    };
+
+    // Parse the manifest to get its mediaType
+    let manifest_media_type = if let Ok(manifest_json) = serde_json::from_slice::<Value>(&body_bytes) {
+        manifest_json.get("mediaType")
+            .and_then(|v| v.as_str())
+            .unwrap_or(OCI_MIME_TYPE)
+            .to_string()
+    } else {
+        OCI_MIME_TYPE.to_string()
+    };
+
+    // Add or update manifest entry
+    let image_name = format!("{}:{}", name, reference);
+    let manifest_entry = serde_json::json!({
+        "mediaType": manifest_media_type,
+        "digest": digest_str,
+        "size": body_bytes.len(),
+        "annotations": {
+            "org.opencontainers.image.base.name": image_name
+        }
+    });
+
+    if let Some(manifests) = index["manifests"].as_array_mut() {
+        // Remove existing entry with same name if it exists
+        manifests.retain(|m| {
+            m["annotations"]["org.opencontainers.image.base.name"].as_str() != Some(&image_name)
+        });
+        manifests.push(manifest_entry);
+    }
+
+    if let Err(_) = tokio::fs::write(&index_path, serde_json::to_string_pretty(&index).unwrap()).await {
+        return Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body("Failed to update index".into())
+            .unwrap();
+    }
+
+    Response::builder()
+        .status(StatusCode::CREATED)
+        .header("Docker-Content-Digest", digest_str.clone())
+        .header("Location", format!("/v2/{}/manifests/{}", name, digest_str))
+        .header("Docker-Distribution-Api-Version", "registry/2.0")
+        .body(Body::empty())
+        .unwrap()
+        
+}
+
+async fn handle_post_blob_upload(path: String) -> Response {
+    // Generate a simple unique ID for the upload session using timestamp and process id
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let pid = std::process::id();
+    let upload_id = format!("{}-{}", timestamp, pid);
+    let location = format!("/v2/{}/{}", path.trim_end_matches('/'), upload_id);
+
+    Response::builder()
+        .status(StatusCode::ACCEPTED)
+        .header("Location", location)
+        .header("Docker-Upload-UUID", upload_id)
+        .header("Range", "0-0")
+        .header("Docker-Distribution-Api-Version", "registry/2.0")
+        .body(Body::empty())
+        .unwrap()
+}
+
+async fn handle_put_blob(upload_id: String, headers: HeaderMap, query_string: String, request: Request) -> Response {
+    let root = PathBuf::from(
+        std::env::var("ZARF_INJECTOR_SEED_ROOT").unwrap_or_else(|_| String::from("/zarf-seed")),
+    );
+
+    // Read the body bytes from the request
+    let request_body_bytes = match axum::body::to_bytes(request.into_body(), usize::MAX).await {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body("Failed to read body".into())
+                .unwrap();
+        }
+    };
+
+    // Try to read from temporary file first (from PATCH), otherwise use request body
+    let temp_path = root.join(".uploads").join(&upload_id);
+    let body_bytes = if temp_path.exists() {
+        match tokio::fs::read(&temp_path).await {
+            Ok(bytes) => bytes,
+            Err(_) => request_body_bytes.to_vec(),
+        }
+    } else {
+        request_body_bytes.to_vec()
+    };
+
+    // Extract digest from query parameter (e.g., digest=sha256:abc123)
+    // Note: query parameter is URL-encoded, so we need to decode it
+    let digest_str = if query_string.contains("digest=") {
+        let encoded = query_string
+            .split('&')
+            .find(|param| param.starts_with("digest="))
+            .and_then(|param| param.strip_prefix("digest="))
+            .unwrap_or("");
+        // Simple URL decode for the colon
+        encoded.replace("%3A", ":").replace("%3a", ":")
+    } else if let Some(digest) = headers.get("Docker-Content-Digest") {
+        digest.to_str().unwrap().to_string()
+    } else {
+        // Calculate digest
+        let mut hasher = Sha256::new();
+        hasher.update(&body_bytes);
+        let digest = hasher.finalize();
+        format!("sha256:{}", digest.encode_hex::<String>())
+    };
+
+    if digest_str.is_empty() {
+        return Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .body("Missing digest".into())
+            .unwrap();
+    }
+
+    // Verify digest
+    let mut hasher = Sha256::new();
+    hasher.update(&body_bytes);
+    let actual_digest = format!("sha256:{}", hasher.finalize().encode_hex::<String>());
+
+    if digest_str != actual_digest {
+        return Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .body(format!("Digest mismatch: expected {} got {}", digest_str, actual_digest).into())
+            .unwrap();
+    }
+
+    // Write blob
+    let blob_path = root.join("blobs").join("sha256").join(digest_str.strip_prefix("sha256:").unwrap());
+    if let Err(_) = tokio::fs::create_dir_all(blob_path.parent().unwrap()).await {
+        return Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body("Failed to create directory".into())
+            .unwrap();
+    }
+
+    if let Err(_) = tokio::fs::write(&blob_path, &body_bytes).await {
+        return Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body("Failed to write blob".into())
+            .unwrap();
+    }
+
+    // Clean up temporary file
+    if temp_path.exists() {
+        let _ = tokio::fs::remove_file(&temp_path).await;
+    }
+
+    Response::builder()
+        .status(StatusCode::CREATED)
+        .header("Docker-Content-Digest", digest_str.clone())
+        .header("Location", format!("/v2/blobs/{}", digest_str))
+        .header("Docker-Distribution-Api-Version", "registry/2.0")
+        .body(Body::empty())
+        .unwrap()
+}
+
+async fn handle_head_manifest(name: String, reference: String) -> Response {
+    let root = PathBuf::from(
+        std::env::var("ZARF_INJECTOR_SEED_ROOT").unwrap_or_else(|_| String::from("/zarf-seed")),
+    );
+
+    let index = match fs::read_to_string(root.join("index.json")) {
+        Ok(content) => content,
+        Err(_) => {
+            return Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Body::empty())
+                .unwrap();
+        }
+    };
+
+    let json: Value = match serde_json::from_str(&index) {
+        Ok(j) => j,
+        Err(_) => {
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::empty())
+                .unwrap();
+        }
+    };
+
+    let mut sha_manifest: String = "".to_owned();
+    let mut media_type = OCI_MIME_TYPE.to_string();
+
+    if reference.starts_with("sha256:") {
+        sha_manifest = reference.strip_prefix("sha256:").unwrap().to_owned();
+        // Find media type from index
+        for manifest in json["manifests"].as_array().unwrap_or(&vec![]) {
+            if let Some(digest) = manifest["digest"].as_str() {
+                if digest == format!("sha256:{}", sha_manifest) {
+                    media_type = manifest["mediaType"].as_str().unwrap_or(OCI_MIME_TYPE).to_string();
+                    break;
+                }
+            }
+        }
+    } else {
+        for manifest in json["manifests"].as_array().unwrap_or(&vec![]) {
+            if let Some(image_base_name) = manifest["annotations"]["org.opencontainers.image.base.name"].as_str() {
+                let requested_reference = format!("{}:{}", name, reference);
+                if requested_reference == image_base_name {
+                    if let Some(digest) = manifest["digest"].as_str() {
+                        sha_manifest = digest.strip_prefix("sha256:").unwrap_or(digest).to_owned();
+                    }
+                    media_type = manifest["mediaType"].as_str().unwrap_or(OCI_MIME_TYPE).to_string();
+                    break;
+                }
+            }
+        }
+    }
+
+    if sha_manifest.is_empty() {
+        Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(Body::empty())
+            .unwrap()
+    } else {
+        let file_path = root.join("blobs").join("sha256").join(&sha_manifest);
+        match fs::metadata(&file_path) {
+            Ok(metadata) => Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", media_type)
+                .header("Content-Length", metadata.len())
+                .header("Docker-Content-Digest", format!("sha256:{}", sha_manifest))
+                .header("Docker-Distribution-Api-Version", "registry/2.0")
+                .body(Body::empty())
+                .unwrap(),
+            Err(_) => Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Body::empty())
+                .unwrap(),
+        }
+    }
+}
+
+async fn handle_head_blob(digest: String) -> Response {
+    let root = PathBuf::from(
+        std::env::var("ZARF_INJECTOR_SEED_ROOT").unwrap_or_else(|_| String::from("/zarf-seed")),
+    );
+    let blob_path = root.join("blobs").join("sha256").join(digest.strip_prefix("sha256:").unwrap());
+
+    match fs::metadata(&blob_path) {
+        Ok(metadata) => Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "application/octet-stream")
+            .header("Content-Length", metadata.len())
+            .header("Docker-Content-Digest", digest.clone())
+            .header("Docker-Distribution-Api-Version", "registry/2.0")
+            .body(Body::empty())
+            .unwrap(),
+        Err(_) => Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(Body::empty())
+            .unwrap(),
+    }
+}
+
+async fn handle_patch_blob(upload_id: String, request: Request) -> Response {
+    let root = PathBuf::from(
+        std::env::var("ZARF_INJECTOR_SEED_ROOT").unwrap_or_else(|_| String::from("/zarf-seed")),
+    );
+
+    // Read the body
+    let body_bytes = match axum::body::to_bytes(request.into_body(), usize::MAX).await {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body("Failed to read body".into())
+                .unwrap();
+        }
+    };
+
+    // Store the upload in a temporary location
+    let temp_dir = root.join(".uploads");
+    if let Err(_) = tokio::fs::create_dir_all(&temp_dir).await {
+        return Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body("Failed to create temp directory".into())
+            .unwrap();
+    }
+
+    let temp_path = temp_dir.join(&upload_id);
+    if let Err(_) = tokio::fs::write(&temp_path, &body_bytes).await {
+        return Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body("Failed to write temp file".into())
+            .unwrap();
+    }
+
+    let current_size = body_bytes.len();
+
+    Response::builder()
+        .status(StatusCode::ACCEPTED)
+        .header("Range", format!("0-{}", current_size))
+        .header("Docker-Distribution-Api-Version", "registry/2.0")
+        .body(Body::empty())
+        .unwrap()
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -432,6 +890,134 @@ mod test {
             .remove_image(&test_image, None, None)
             .await
             .expect("should have cleaned up the pulled test image");
+    }
+
+    #[tokio::test]
+    async fn test_push_integration() {
+        let docker = Docker::connect_with_socket_defaults()
+            .expect("should have been able to create a Docker client");
+
+        // Create a temporary directory that will auto-cleanup on drop
+        let tmpdir = TempDir::new().expect("should have created temporary directory");
+
+        let env = TestEnv::new(docker.clone(), TEST_IMAGE, tmpdir.path())
+            .await
+            .expect("should have setup the test environment");
+
+        let output_root = env.output_dir();
+        let _init_guard = EnvGuard::new(
+            "ZARF_INJECTOR_INIT_ROOT",
+            &env.input_dir().to_string_lossy(),
+        );
+        let _seed_guard = EnvGuard::new("ZARF_INJECTOR_SEED_ROOT", &output_root.to_string_lossy());
+        unpack(&env.shasum());
+
+        localize_test_image(TEST_IMAGE, &output_root)
+            .expect("should have localized the test image's index.json");
+
+        // Use :0 to let the operating system decide the random port to listen on
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("should have been able to bind listener to a random port on localhost");
+        let random_port = listener
+            .local_addr()
+            .expect("should have been able to resolve the address")
+            .port();
+
+        // Start registry in the background
+        tokio::spawn(async {
+            let app = start_seed_registry();
+            axum::serve(listener, app)
+                .await
+                .expect("should have been able to start serving the registry");
+        });
+
+        // Wait for registry to be ready
+        for _ in 0..10 {
+            if tokio::net::TcpStream::connect(format!("127.0.0.1:{}", random_port))
+                .await
+                .is_ok()
+            {
+                break;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        }
+
+        let test_image = TEST_IMAGE.replace("ghcr.io", &format!("127.0.0.1:{random_port}"));
+
+        // Pull the original image first
+        let pull_options = Some(CreateImageOptions {
+            from_image: test_image.clone(),
+            ..Default::default()
+        });
+        docker
+            .create_image(pull_options, None, None)
+            .try_collect::<Vec<_>>()
+            .await
+            .expect("should have pulled test image");
+
+        // Tag it with a new name for pushing
+        let pushed_image = format!("127.0.0.1:{random_port}/zarf-dev/doom-game:pushed-test");
+        docker
+            .tag_image(
+                &test_image,
+                Some(bollard::image::TagImageOptions {
+                    repo: format!("127.0.0.1:{random_port}/zarf-dev/doom-game"),
+                    tag: "pushed-test".to_string(),
+                }),
+            )
+            .await
+            .expect("should have tagged image");
+
+        // Push the image to the registry
+        use bollard::image::PushImageOptions;
+        let push_result = docker
+            .push_image(
+                &format!("127.0.0.1:{random_port}/zarf-dev/doom-game:pushed-test"),
+                Some(PushImageOptions {
+                    tag: "pushed-test".to_string(),
+                    ..Default::default()
+                }),
+                None,
+            )
+            .try_collect::<Vec<_>>()
+            .await;
+        if let Err(ref e) = push_result {
+            eprintln!("Push error: {:?}", e);
+        }
+        assert!(push_result.is_ok(), "should have pushed image to registry: {:?}", push_result);
+
+        // Verify we can pull it back with the new tag
+        docker
+            .remove_image(&pushed_image, None, None)
+            .await
+            .expect("should have removed local copy");
+
+        let verify_pull = docker
+            .create_image(
+                Some(CreateImageOptions {
+                    from_image: pushed_image.clone(),
+                    ..Default::default()
+                }),
+                None,
+                None,
+            )
+            .try_collect::<Vec<_>>()
+            .await;
+        if let Err(ref e) = verify_pull {
+            eprintln!("Pull back error: {:?}", e);
+        }
+        assert!(verify_pull.is_ok(), "should have pulled pushed image back: {:?}", verify_pull);
+
+        // Cleanup
+        docker
+            .remove_image(&test_image, None, None)
+            .await
+            .expect("should have cleaned up test image");
+        docker
+            .remove_image(&pushed_image, None, None)
+            .await
+            .expect("should have cleaned up pushed image");
     }
 
     // This localizes the test image's index.json such that the registry server

@@ -39,7 +39,7 @@ check-size: injector ## Validate that both injector binaries are under 1 MiB
 
 
 unit-test: ## Run cargo tests
-	cargo test 	
+	cargo test -- --test-threads=1
 
 target/x86_64-unknown-linux-musl/release/zarf-injector: src/main.rs Cargo.toml
 	rustup target add x86_64-unknown-linux-musl
