@@ -3,112 +3,24 @@
 
 use std::env;
 use std::fs;
-use std::fs::File;
-use std::io;
-use std::io::Read;
-use std::io::Write;
 use std::path::PathBuf;
 
 use axum::{
     Router,
     body::Body,
     extract::{Path, Request},
-    http::{StatusCode, HeaderMap},
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
 };
-use flate2::read::GzDecoder;
 use hex::ToHex;
 use regex_lite::Regex;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use tar::Archive;
 use tokio_util::io::ReaderStream;
 const OCI_MIME_TYPE: &str = "application/vnd.oci.image.manifest.v1+json";
 
-// Reads the binary contents of a file
-fn get_file(path: &PathBuf) -> io::Result<Vec<u8>> {
-    // open the file
-    let mut f = File::open(path)?;
-    // create an empty buffer
-    let mut buffer = Vec::new();
-
-    // read the whole file
-    match f.read_to_end(&mut buffer) {
-        Ok(_) => Ok(buffer),
-        Err(e) => Err(e),
-    }
-}
-
-// Merges all given files into one buffer
-fn collect_binary_data(paths: &Vec<PathBuf>) -> io::Result<Vec<u8>> {
-    // create an empty buffer
-    let mut buffer = Vec::new();
-
-    // add contents of all files in paths to buffer
-    for path in paths {
-        println!("Processing {}", path.display());
-        let new_content = get_file(path);
-        buffer
-            .write_all(&new_content.unwrap())
-            .expect("Could not add the file contents to the merged file buffer");
-    }
-
-    Ok(buffer)
-}
-
-/// Unpacks the zarf-payload-* configmaps back into a tarball, then unpacks into ./zarf-seed
-///
-/// Inspired by https://medium.com/@nlauchande/rust-coding-up-a-simple-concatenate-files-tool-and-first-impressions-a8cbe680e887
-fn unpack(sha_sum: &String) {
-    let init_root =
-        std::env::var("ZARF_INJECTOR_INIT_ROOT").unwrap_or_else(|_| String::from("/zarf-init"));
-    let seed_root =
-        std::env::var("ZARF_INJECTOR_SEED_ROOT").unwrap_or_else(|_| String::from("/zarf-seed"));
-    // get the list of file matches to merge
-    let entries = std::fs::read_dir(init_root).expect("failed to read from init directory");
-    let mut file_partials: Vec<PathBuf> = entries
-        // Filter out any entries that were errors
-        .filter_map(|entry| entry.ok())
-        // Check that the entry is a file
-        .filter(|entry| entry.metadata().is_ok_and(|e| e.is_file()))
-        // Check that the entry's file name starts with zarf-injector-
-        .filter(|entry| {
-            entry
-                .file_name()
-                .to_str()
-                .is_some_and(|name| name.starts_with("zarf-payload-"))
-        })
-        // Turn each entry in to a file path
-        .map(|entry| entry.path())
-        .collect();
-
-    // ensure a default sort-order
-    file_partials.sort();
-
-    // get a buffer of the final merged file contents
-    let contents = collect_binary_data(&file_partials).unwrap();
-
-    // create a Sha256 object
-    let mut hasher = Sha256::new();
-
-    // write input message
-    hasher.update(&contents);
-
-    // read hash digest and consume hasher
-    let result = hasher.finalize();
-    let result_string = result.encode_hex::<String>();
-    assert_eq!(*sha_sum, result_string);
-
-    // write the merged file to disk and extract it
-    let tar = GzDecoder::new(&contents[..]);
-    let mut archive = Archive::new(tar);
-    archive
-        .unpack(seed_root)
-        .expect("Unable to unarchive the resulting tarball");
-}
-
-/// Starts a static docker compliant registry server that only serves the single image from the CWD
+/// Starts a docker compliant registry server that serves images from the seed directory
 ///
 /// (which is a OCI image layout):
 ///
@@ -119,11 +31,14 @@ fn start_seed_registry() -> Router {
     // The name and reference parameter identify the image
     // The reference may include a tag or digest.
     Router::new()
-        .route("/v2/*path", get(handler)
-            .put(put_handler)
-            .head(head_handler)
-            .post(post_handler)
-            .patch(patch_handler))
+        .route(
+            "/v2/*path",
+            get(handler)
+                .put(put_handler)
+                .head(head_handler)
+                .post(post_handler)
+                .patch(patch_handler),
+        )
         .route(
             "/v2/",
             get(|| async {
@@ -192,7 +107,10 @@ async fn handle_get_manifest(name: String, reference: String) -> Response {
         for manifest in json["manifests"].as_array().unwrap_or(&vec![]) {
             if let Some(digest) = manifest["digest"].as_str() {
                 if digest == format!("sha256:{}", sha_manifest) {
-                    media_type = manifest["mediaType"].as_str().unwrap_or(OCI_MIME_TYPE).to_string();
+                    media_type = manifest["mediaType"]
+                        .as_str()
+                        .unwrap_or(OCI_MIME_TYPE)
+                        .to_string();
                     break;
                 }
             }
@@ -210,7 +128,10 @@ async fn handle_get_manifest(name: String, reference: String) -> Response {
                     .strip_prefix("sha256:")
                     .unwrap()
                     .to_owned();
-                media_type = manifest["mediaType"].as_str().unwrap_or(OCI_MIME_TYPE).to_string();
+                media_type = manifest["mediaType"]
+                    .as_str()
+                    .unwrap_or(OCI_MIME_TYPE)
+                    .to_string();
                 break;
             }
         }
@@ -364,7 +285,12 @@ async fn patch_handler(Path(path): Path<String>, request: Request) -> Response {
     }
 }
 
-async fn handle_put_manifest(name: String, reference: String, headers: HeaderMap, request: Request) -> Response {
+async fn handle_put_manifest(
+    name: String,
+    reference: String,
+    headers: HeaderMap,
+    request: Request,
+) -> Response {
     let root = PathBuf::from(
         std::env::var("ZARF_INJECTOR_SEED_ROOT").unwrap_or_else(|_| String::from("/zarf-seed")),
     );
@@ -397,7 +323,10 @@ async fn handle_put_manifest(name: String, reference: String, headers: HeaderMap
     }
 
     // Write manifest to blobs
-    let blob_path = root.join("blobs").join("sha256").join(digest_str.strip_prefix("sha256:").unwrap());
+    let blob_path = root
+        .join("blobs")
+        .join("sha256")
+        .join(digest_str.strip_prefix("sha256:").unwrap());
     if let Err(_) = tokio::fs::create_dir_all(blob_path.parent().unwrap()).await {
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -415,10 +344,12 @@ async fn handle_put_manifest(name: String, reference: String, headers: HeaderMap
     // Update index.json
     let index_path = root.join("index.json");
     let mut index: Value = match tokio::fs::read_to_string(&index_path).await {
-        Ok(content) => serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({
-            "schemaVersion": 2,
-            "manifests": []
-        })),
+        Ok(content) => serde_json::from_str(&content).unwrap_or_else(|_| {
+            serde_json::json!({
+                "schemaVersion": 2,
+                "manifests": []
+            })
+        }),
         Err(_) => serde_json::json!({
             "schemaVersion": 2,
             "manifests": []
@@ -426,14 +357,16 @@ async fn handle_put_manifest(name: String, reference: String, headers: HeaderMap
     };
 
     // Parse the manifest to get its mediaType
-    let manifest_media_type = if let Ok(manifest_json) = serde_json::from_slice::<Value>(&body_bytes) {
-        manifest_json.get("mediaType")
-            .and_then(|v| v.as_str())
-            .unwrap_or(OCI_MIME_TYPE)
-            .to_string()
-    } else {
-        OCI_MIME_TYPE.to_string()
-    };
+    let manifest_media_type =
+        if let Ok(manifest_json) = serde_json::from_slice::<Value>(&body_bytes) {
+            manifest_json
+                .get("mediaType")
+                .and_then(|v| v.as_str())
+                .unwrap_or(OCI_MIME_TYPE)
+                .to_string()
+        } else {
+            OCI_MIME_TYPE.to_string()
+        };
 
     // Add or update manifest entry
     let image_name = format!("{}:{}", name, reference);
@@ -454,7 +387,9 @@ async fn handle_put_manifest(name: String, reference: String, headers: HeaderMap
         manifests.push(manifest_entry);
     }
 
-    if let Err(_) = tokio::fs::write(&index_path, serde_json::to_string_pretty(&index).unwrap()).await {
+    if let Err(_) =
+        tokio::fs::write(&index_path, serde_json::to_string_pretty(&index).unwrap()).await
+    {
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("Failed to update index".into())
@@ -468,13 +403,15 @@ async fn handle_put_manifest(name: String, reference: String, headers: HeaderMap
         .header("Docker-Distribution-Api-Version", "registry/2.0")
         .body(Body::empty())
         .unwrap()
-        
 }
 
 async fn handle_post_blob_upload(path: String) -> Response {
     // Generate a simple unique ID for the upload session using timestamp and process id
     use std::time::{SystemTime, UNIX_EPOCH};
-    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let pid = std::process::id();
     let upload_id = format!("{}-{}", timestamp, pid);
     let location = format!("/v2/{}/{}", path.trim_end_matches('/'), upload_id);
@@ -489,7 +426,12 @@ async fn handle_post_blob_upload(path: String) -> Response {
         .unwrap()
 }
 
-async fn handle_put_blob(upload_id: String, headers: HeaderMap, query_string: String, request: Request) -> Response {
+async fn handle_put_blob(
+    upload_id: String,
+    headers: HeaderMap,
+    query_string: String,
+    request: Request,
+) -> Response {
     let root = PathBuf::from(
         std::env::var("ZARF_INJECTOR_SEED_ROOT").unwrap_or_else(|_| String::from("/zarf-seed")),
     );
@@ -551,12 +493,21 @@ async fn handle_put_blob(upload_id: String, headers: HeaderMap, query_string: St
     if digest_str != actual_digest {
         return Response::builder()
             .status(StatusCode::BAD_REQUEST)
-            .body(format!("Digest mismatch: expected {} got {}", digest_str, actual_digest).into())
+            .body(
+                format!(
+                    "Digest mismatch: expected {} got {}",
+                    digest_str, actual_digest
+                )
+                .into(),
+            )
             .unwrap();
     }
 
     // Write blob
-    let blob_path = root.join("blobs").join("sha256").join(digest_str.strip_prefix("sha256:").unwrap());
+    let blob_path = root
+        .join("blobs")
+        .join("sha256")
+        .join(digest_str.strip_prefix("sha256:").unwrap());
     if let Err(_) = tokio::fs::create_dir_all(blob_path.parent().unwrap()).await {
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -619,20 +570,28 @@ async fn handle_head_manifest(name: String, reference: String) -> Response {
         for manifest in json["manifests"].as_array().unwrap_or(&vec![]) {
             if let Some(digest) = manifest["digest"].as_str() {
                 if digest == format!("sha256:{}", sha_manifest) {
-                    media_type = manifest["mediaType"].as_str().unwrap_or(OCI_MIME_TYPE).to_string();
+                    media_type = manifest["mediaType"]
+                        .as_str()
+                        .unwrap_or(OCI_MIME_TYPE)
+                        .to_string();
                     break;
                 }
             }
         }
     } else {
         for manifest in json["manifests"].as_array().unwrap_or(&vec![]) {
-            if let Some(image_base_name) = manifest["annotations"]["org.opencontainers.image.base.name"].as_str() {
+            if let Some(image_base_name) =
+                manifest["annotations"]["org.opencontainers.image.base.name"].as_str()
+            {
                 let requested_reference = format!("{}:{}", name, reference);
                 if requested_reference == image_base_name {
                     if let Some(digest) = manifest["digest"].as_str() {
                         sha_manifest = digest.strip_prefix("sha256:").unwrap_or(digest).to_owned();
                     }
-                    media_type = manifest["mediaType"].as_str().unwrap_or(OCI_MIME_TYPE).to_string();
+                    media_type = manifest["mediaType"]
+                        .as_str()
+                        .unwrap_or(OCI_MIME_TYPE)
+                        .to_string();
                     break;
                 }
             }
@@ -667,7 +626,10 @@ async fn handle_head_blob(digest: String) -> Response {
     let root = PathBuf::from(
         std::env::var("ZARF_INJECTOR_SEED_ROOT").unwrap_or_else(|_| String::from("/zarf-seed")),
     );
-    let blob_path = root.join("blobs").join("sha256").join(digest.strip_prefix("sha256:").unwrap());
+    let blob_path = root
+        .join("blobs")
+        .join("sha256")
+        .join(digest.strip_prefix("sha256:").unwrap());
 
     match fs::metadata(&blob_path) {
         Ok(metadata) => Response::builder()
@@ -732,17 +694,7 @@ async fn handle_patch_blob(upload_id: String, request: Request) -> Response {
 async fn main() {
     let args: Vec<String> = env::args().collect();
 
-    if args.len() < 2 {
-        println!("Usage: {} <sha256sum> [bind_address]", args[0]);
-        return;
-    }
-
-    println!("unpacking: {}", args[1]);
-    let payload_sha = &args[1];
-
-    let bind_addr = args.get(2).map(|s| s.as_str()).unwrap_or("0.0.0.0:5000");
-
-    unpack(payload_sha);
+    let bind_addr = args.get(1).map(|s| s.as_str()).unwrap_or("0.0.0.0:5000");
 
     let listener = tokio::net::TcpListener::bind(bind_addr).await.unwrap();
     println!("listening on {}", listener.local_addr().unwrap());
@@ -756,14 +708,13 @@ mod test {
     use flate2::{Compression, write::GzEncoder};
     use futures_util::{TryStreamExt, future::ready};
     use regex_lite::Regex;
-    use sha2::{Digest, Sha256};
     use std::{
         fs::File,
-        io::{BufRead, BufReader, Cursor, Seek, Write},
+        io::{Cursor, Seek, Write},
         path::{Path, PathBuf},
     };
 
-    use crate::{start_seed_registry, unpack};
+    use crate::start_seed_registry;
 
     struct EnvGuard {
         key: String,
@@ -811,9 +762,6 @@ mod test {
     }
 
     const TEST_IMAGE: &str = "ghcr.io/zarf-dev/doom-game:0.0.1";
-    // Split gzip into 1024 * 768 kb chunks
-    const CHUNK_SIZE: usize = 1024 * 768;
-    const ZARF_PAYLOAD_PREFIX: &str = "zarf-payload";
     // Based on upstream rust-oci-client regex:
     // https://github.com/oras-project/rust-oci-client/blob/657c1caf9e99ce2184a96aa319fde4f4a8c09439/src/regexp.rs#L3-L5
     const REFERENCE_REGEXP: &str = r"^((?:(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9])(?:(?:\.(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]))+)?(?::[0-9]+)?/)?[a-z0-9]+(?:(?:(?:[._]|__|[-]*)[a-z0-9]+)+)?(?:(?:/[a-z0-9]+(?:(?:(?:[._]|__|[-]*)[a-z0-9]+)+)?)+)?)(?::([\w][\w.-]{0,127}))?(?:@([A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*[:][[:xdigit:]]{32,}))?$";
@@ -830,13 +778,8 @@ mod test {
             .await
             .expect("should have setup the test environment");
 
-        let output_root = env.output_dir();
-        let _init_guard = EnvGuard::new(
-            "ZARF_INJECTOR_INIT_ROOT",
-            &env.input_dir().to_string_lossy(),
-        );
+        let output_root = env.seed_dir();
         let _seed_guard = EnvGuard::new("ZARF_INJECTOR_SEED_ROOT", &output_root.to_string_lossy());
-        unpack(&env.shasum());
 
         // Assert the files and directory we expect to exist do exist
         assert!(Path::new(&output_root.join("index.json")).exists());
@@ -904,13 +847,8 @@ mod test {
             .await
             .expect("should have setup the test environment");
 
-        let output_root = env.output_dir();
-        let _init_guard = EnvGuard::new(
-            "ZARF_INJECTOR_INIT_ROOT",
-            &env.input_dir().to_string_lossy(),
-        );
+        let output_root = env.seed_dir();
         let _seed_guard = EnvGuard::new("ZARF_INJECTOR_SEED_ROOT", &output_root.to_string_lossy());
-        unpack(&env.shasum());
 
         localize_test_image(TEST_IMAGE, &output_root)
             .expect("should have localized the test image's index.json");
@@ -985,7 +923,11 @@ mod test {
         if let Err(ref e) = push_result {
             eprintln!("Push error: {:?}", e);
         }
-        assert!(push_result.is_ok(), "should have pushed image to registry: {:?}", push_result);
+        assert!(
+            push_result.is_ok(),
+            "should have pushed image to registry: {:?}",
+            push_result
+        );
 
         // Verify we can pull it back with the new tag
         docker
@@ -1007,7 +949,11 @@ mod test {
         if let Err(ref e) = verify_pull {
             eprintln!("Pull back error: {:?}", e);
         }
-        assert!(verify_pull.is_ok(), "should have pulled pushed image back: {:?}", verify_pull);
+        assert!(
+            verify_pull.is_ok(),
+            "should have pulled pushed image back: {:?}",
+            verify_pull
+        );
 
         // Cleanup
         docker
@@ -1113,100 +1059,50 @@ mod test {
     }
 
     struct TestEnv {
-        digest: String,
-        input_dir: PathBuf,
-        output_dir: PathBuf,
+        seed_dir: PathBuf,
     }
 
     impl TestEnv {
         async fn new(client: Docker, image: &str, root: &Path) -> Result<Self> {
-            // Ensure we have test directories set up
-            let input_dir = root.join("zarf-init");
-            let output_dir = root.join("zarf-seed");
-            std::fs::create_dir(&input_dir).context("should have created test input directory")?;
-            std::fs::create_dir(&output_dir)
-                .context("should have created test output directory")?;
+            // Ensure we have test directory set up
+            let seed_dir = root.join("zarf-seed");
+            std::fs::create_dir(&seed_dir)
+                .context("should have created test seed directory")?;
 
             // Download test image
             Self::ensure_image_exists_locally(&client, image)
                 .await
                 .context("should have pulled down the test image")?;
 
-            // Export test image from docker into a stream to iterate over
+            // Export test image from docker as a tarball
             let image_stream = client.export_image(image).map_err(anyhow::Error::msg);
 
-            // Create an in-memory seekable buffer reading in the image and
-            // for iteration later when creating the zarf-payload-* chunks
+            // Collect the tarball into memory
             let buffer = Cursor::new(Vec::new());
-
-            // Encode test image as gzip into the buffer
             let mut gz = GzEncoder::new(buffer, Compression::default());
             image_stream
                 .try_for_each(|data| {
-                    // We map the error to make sure we're propagating the
-                    // same type of error across the board
                     let res = gz.write_all(&data).map_err(anyhow::Error::msg);
-                    // Ready needs to be called for the stream to do its thing
                     ready(res)
                 })
                 .await?;
 
-            let mut buffer = gz
+            let buffer = gz
                 .finish()
-                .context("should have finished reading from stream")?;
+                .context("should have finished encoding image")?;
 
-            // Rewind to the beginning of the now gzip encoded contents image,
-            // so that it can be iterated over to create zarf-payload-* chunks
-            buffer
-                .rewind()
-                .context("should have rewound buffer for reading")?;
-            let mut reader = BufReader::with_capacity(CHUNK_SIZE, buffer);
+            // Extract the tarball directly to the seed directory
+            let tar = flate2::read::GzDecoder::new(&buffer.get_ref()[..]);
+            let mut archive = tar::Archive::new(tar);
+            archive
+                .unpack(&seed_dir)
+                .context("should have unpacked image to seed directory")?;
 
-            let mut hasher = Sha256::new();
-            let mut chunk_id = 0;
-            while let std::result::Result::Ok(chunk) = reader.fill_buf() {
-                let read_bytes = chunk.len();
-                if read_bytes == 0 {
-                    break;
-                }
-
-                hasher.update(chunk);
-
-                // Write chunks to disk as zarf-payload-00X in temp dir
-                let mut chunk_file = File::create(
-                    input_dir.join(format!("{}-{:0>3}", ZARF_PAYLOAD_PREFIX, chunk_id)),
-                )
-                .context("should have created chunk file")?;
-                chunk_file
-                    .write_all(chunk)
-                    .context("should have written chunk to file")?;
-                chunk_file
-                    .flush()
-                    .context("should have flushed chunk file")?;
-                chunk_id += 1;
-
-                reader.consume(read_bytes);
-            }
-            let hash = hasher.finalize();
-            let digest = format!("{hash:x}");
-
-            Ok(Self {
-                digest,
-                input_dir,
-                output_dir,
-            })
+            Ok(Self { seed_dir })
         }
 
-        fn shasum(&self) -> String {
-            self.digest.to_owned()
-        }
-
-        fn input_dir(&self) -> PathBuf {
-            self.input_dir.to_owned()
-        }
-
-        fn output_dir(&self) -> PathBuf {
-            self.output_dir.to_owned()
+        fn seed_dir(&self) -> PathBuf {
+            self.seed_dir.to_owned()
         }
 
         async fn ensure_image_exists_locally(client: &Docker, image: &str) -> Result<()> {
