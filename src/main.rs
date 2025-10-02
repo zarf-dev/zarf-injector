@@ -397,14 +397,13 @@ async fn handle_put_manifest(name: String, reference: String, request: Request) 
 }
 
 async fn handle_post_blob_upload(path: String) -> Response {
-    // Generate a simple unique ID for the upload session using timestamp and process id
+    // Generate a unique ID for the upload session using timestamp
     use std::time::{SystemTime, UNIX_EPOCH};
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let pid = std::process::id();
-    let upload_id = format!("{}-{}", timestamp, pid);
+    let upload_id = format!("{}", timestamp);
     let location = format!("/v2/{}/{}", path.trim_end_matches('/'), upload_id);
 
     Response::builder()
