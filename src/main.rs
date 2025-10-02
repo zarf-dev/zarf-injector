@@ -782,73 +782,37 @@ mod test {
     async fn test_integration() {
         let media_types = [OCI_MIME_TYPE, DOCKER_MEDIA_TYPE];
         for media_type in media_types {
-            test_registry("ghcr.io/zarf-dev/doom-game:0.0.1", media_type).await;
+            test_registry(TEST_IMAGE, media_type).await;
         }
     }
 
     async fn test_registry(image: &str, media_type: &str) {
+        let registry = TestRegistry::new(image).await;
+
+        // Assert the files and directory we expect to exist do exist
+        assert!(Path::new(&registry.output_root.join("index.json")).exists());
+        assert!(Path::new(&registry.output_root.join("manifest.json")).exists());
+        assert!(Path::new(&registry.output_root.join("oci-layout")).exists());
+        assert!(Path::new(&registry.output_root.join("repositories")).exists());
+
+        change_manifest_media_type(&registry.output_root, media_type)
+            .expect("should have changed the mediaType of the manifest");
+
         let docker = Docker::connect_with_socket_defaults()
             .expect("should have been able to create a Docker client");
 
-        // Create a temporary directory that will auto-cleanup on drop
-        let tmpdir = TempDir::new().expect("should have created temporary directory");
-
-        let env = TestEnv::new(docker.clone(), image, tmpdir.path())
-            .await
-            .expect("should have setup the test environment");
-
-        let output_root = env.seed_dir();
-        let _seed_guard = EnvGuard::new("ZARF_INJECTOR_SEED_ROOT", &output_root.to_string_lossy());
-
-        // Assert the files and directory we expect to exist do exist
-        assert!(Path::new(&output_root.join("index.json")).exists());
-        assert!(Path::new(&output_root.join("manifest.json")).exists());
-        assert!(Path::new(&output_root.join("oci-layout")).exists());
-        assert!(Path::new(&output_root.join("repositories")).exists());
-
-        localize_test_image(image, &output_root)
-            .expect("should have localized the test image's index.json");
-
-        change_manifest_media_type(&output_root, media_type)
-            .expect("should have changed the mediaType of the manifest");
-
-        // Use :0 to let the operating system decide the random port to listen on
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("should have been able to bind listener to a random port on localhost");
-        let random_port = listener
-            .local_addr()
-            .expect("should have been able to resolve the address")
-            .port();
-
-        // Start registry in the background
-        tokio::spawn(async {
-            let app = start_seed_registry();
-            axum::serve(listener, app)
-                .await
-                .expect("should have been able to start serving the registry");
-        });
-
-        // Wait for registry to be ready
-        for _ in 0..10 {
-            if tokio::net::TcpStream::connect(format!("127.0.0.1:{}", random_port))
-                .await
-                .is_ok()
-            {
-                break;
-            }
-            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-        }
-
         let image_name = extract_name(image);
-        let test_image = &format!("127.0.0.1:{random_port}/{image_name}");
-        let options = Some(CreateImageOptions {
-            from_image: test_image.clone(),
-            ..Default::default()
-        });
+        let test_image = format!("127.0.0.1:{}/{}", registry.random_port, image_name);
 
         let test_image_pull = docker
-            .create_image(options, None, None)
+            .create_image(
+                Some(CreateImageOptions {
+                    from_image: test_image.clone(),
+                    ..Default::default()
+                }),
+                None,
+                None,
+            )
             .try_collect::<Vec<_>>()
             .await;
         assert!(test_image_pull.is_ok());
