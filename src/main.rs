@@ -34,7 +34,7 @@ fn start_seed_registry() -> Router {
     Router::new()
         .route(
             "/v2/*path",
-            get(handler)
+            get(get_handler)
                 .put(put_handler)
                 .head(head_handler)
                 .post(post_handler)
@@ -66,7 +66,7 @@ fn start_seed_registry() -> Router {
         )
 }
 
-async fn handler(Path(path): Path<String>) -> Response {
+async fn get_handler(Path(path): Path<String>) -> Response {
     println!("request: {}", path);
     let path = &path;
     let manifest = Regex::new("(.+)/manifests/(.+)").unwrap();
