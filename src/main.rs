@@ -409,7 +409,6 @@ async fn handle_post_blob_upload(path: String) -> Response {
     Response::builder()
         .status(StatusCode::ACCEPTED)
         .header("Location", location)
-        .header("Docker-Upload-UUID", upload_id)
         .header("Range", "0-0")
         .header("Docker-Distribution-Api-Version", "registry/2.0")
         .body(Body::empty())
