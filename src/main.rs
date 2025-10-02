@@ -858,6 +858,65 @@ mod test {
             .expect("should have cleaned up the pulled test image");
     }
 
+    struct TestRegistry {
+        random_port: u16,
+        output_root: PathBuf,
+        _seed_guard: EnvGuard,
+        _tmpdir: TempDir,
+    }
+
+    impl TestRegistry {
+        async fn new(image: &str) -> Self {
+            let tmpdir = TempDir::new().expect("should have created temporary directory");
+
+            let docker = Docker::connect_with_socket_defaults()
+                .expect("should have been able to create a Docker client");
+
+            let env = TestEnv::new(docker.clone(), image, tmpdir.path())
+                .await
+                .expect("should have setup the test environment");
+
+            let output_root = env.seed_dir();
+            let _seed_guard =
+                EnvGuard::new("ZARF_INJECTOR_SEED_ROOT", &output_root.to_string_lossy());
+
+            localize_test_image(image, &output_root)
+                .expect("should have localized the test image's index.json");
+
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("should have been able to bind listener to a random port on localhost");
+            let random_port = listener
+                .local_addr()
+                .expect("should have been able to resolve the address")
+                .port();
+
+            tokio::spawn(async {
+                let app = start_seed_registry();
+                axum::serve(listener, app)
+                    .await
+                    .expect("should have been able to start serving the registry");
+            });
+
+            for _ in 0..10 {
+                if tokio::net::TcpStream::connect(format!("127.0.0.1:{}", random_port))
+                    .await
+                    .is_ok()
+                {
+                    break;
+                }
+                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            }
+
+            Self {
+                random_port,
+                output_root,
+                _seed_guard,
+                _tmpdir: tmpdir,
+            }
+        }
+    }
+
     #[tokio::test]
     #[serial]
     async fn test_push_integration() {
@@ -866,81 +925,44 @@ mod test {
     }
 
     async fn test_push_with_tag() {
+        let registry = TestRegistry::new(TEST_IMAGE).await;
         let docker = Docker::connect_with_socket_defaults()
             .expect("should have been able to create a Docker client");
 
-        // Create a temporary directory that will auto-cleanup on drop
-        let tmpdir = TempDir::new().expect("should have created temporary directory");
-
-        let env = TestEnv::new(docker.clone(), TEST_IMAGE, tmpdir.path())
-            .await
-            .expect("should have setup the test environment");
-
-        let output_root = env.seed_dir();
-        let _seed_guard = EnvGuard::new("ZARF_INJECTOR_SEED_ROOT", &output_root.to_string_lossy());
-
-        localize_test_image(TEST_IMAGE, &output_root)
-            .expect("should have localized the test image's index.json");
-
-        // Use :0 to let the operating system decide the random port to listen on
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("should have been able to bind listener to a random port on localhost");
-        let random_port = listener
-            .local_addr()
-            .expect("should have been able to resolve the address")
-            .port();
-
-        // Start registry in the background
-        tokio::spawn(async {
-            let app = start_seed_registry();
-            axum::serve(listener, app)
-                .await
-                .expect("should have been able to start serving the registry");
-        });
-
-        // Wait for registry to be ready
-        for _ in 0..10 {
-            if tokio::net::TcpStream::connect(format!("127.0.0.1:{}", random_port))
-                .await
-                .is_ok()
-            {
-                break;
-            }
-            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-        }
-
-        let test_image = TEST_IMAGE.replace("ghcr.io", &format!("127.0.0.1:{random_port}"));
-
-        // Pull the original image first
-        let pull_options = Some(CreateImageOptions {
-            from_image: test_image.clone(),
-            ..Default::default()
-        });
+        let test_image =
+            TEST_IMAGE.replace("ghcr.io", &format!("127.0.0.1:{}", registry.random_port));
         docker
-            .create_image(pull_options, None, None)
+            .create_image(
+                Some(CreateImageOptions {
+                    from_image: test_image.clone(),
+                    ..Default::default()
+                }),
+                None,
+                None,
+            )
             .try_collect::<Vec<_>>()
             .await
             .expect("should have pulled test image");
 
-        // Tag it with a new name for pushing
-        let pushed_image = format!("127.0.0.1:{random_port}/zarf-dev/doom-game:pushed-test");
+        let pushed_image = format!(
+            "127.0.0.1:{}/zarf-dev/doom-game:pushed-test",
+            registry.random_port
+        );
         docker
             .tag_image(
                 &test_image,
                 Some(bollard::image::TagImageOptions {
-                    repo: format!("127.0.0.1:{random_port}/zarf-dev/doom-game"),
+                    repo: format!("127.0.0.1:{}/zarf-dev/doom-game", registry.random_port),
                     tag: "pushed-test".to_string(),
                 }),
             )
             .await
             .expect("should have tagged image");
 
-        // Push the image to the registry
         use bollard::image::PushImageOptions;
         let push_result = docker
             .push_image(
-                &format!("127.0.0.1:{random_port}/zarf-dev/doom-game:pushed-test"),
+                &pushed_image,
                 Some(PushImageOptions {
                     tag: "pushed-test".to_string(),
                     ..Default::default()
@@ -949,16 +971,12 @@ mod test {
             )
             .try_collect::<Vec<_>>()
             .await;
-        if let Err(ref e) = push_result {
-            eprintln!("Push error: {:?}", e);
-        }
         assert!(
             push_result.is_ok(),
             "should have pushed image to registry: {:?}",
             push_result
         );
 
-        // Verify we can pull it back with the new tag
         docker
             .remove_image(&pushed_image, None, None)
             .await
@@ -975,16 +993,12 @@ mod test {
             )
             .try_collect::<Vec<_>>()
             .await;
-        if let Err(ref e) = verify_pull {
-            eprintln!("Pull back error: {:?}", e);
-        }
         assert!(
             verify_pull.is_ok(),
             "should have pulled pushed image back: {:?}",
             verify_pull
         );
 
-        // Cleanup
         docker
             .remove_image(&test_image, None, None)
             .await
@@ -996,78 +1010,40 @@ mod test {
     }
 
     async fn test_push_with_sha() {
+        let registry = TestRegistry::new(TEST_IMAGE).await;
         let docker = Docker::connect_with_socket_defaults()
             .expect("should have been able to create a Docker client");
 
-        // Create a temporary directory that will auto-cleanup on drop
-        let tmpdir = TempDir::new().expect("should have created temporary directory");
-
-        let env = TestEnv::new(docker.clone(), TEST_IMAGE, tmpdir.path())
-            .await
-            .expect("should have setup the test environment");
-
-        let output_root = env.seed_dir();
-        let _seed_guard = EnvGuard::new("ZARF_INJECTOR_SEED_ROOT", &output_root.to_string_lossy());
-
-        localize_test_image(TEST_IMAGE, &output_root)
-            .expect("should have localized the test image's index.json");
-
-        // Use :0 to let the operating system decide the random port to listen on
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("should have been able to bind listener to a random port on localhost");
-        let random_port = listener
-            .local_addr()
-            .expect("should have been able to resolve the address")
-            .port();
-
-        // Start registry in the background
-        tokio::spawn(async {
-            let app = start_seed_registry();
-            axum::serve(listener, app)
-                .await
-                .expect("should have been able to start serving the registry");
-        });
-
-        // Wait for registry to be ready
-        for _ in 0..10 {
-            if tokio::net::TcpStream::connect(format!("127.0.0.1:{}", random_port))
-                .await
-                .is_ok()
-            {
-                break;
-            }
-            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-        }
-
-        let test_image = TEST_IMAGE.replace("ghcr.io", &format!("127.0.0.1:{random_port}"));
-
-        // Pull the original image first
-        let pull_options = Some(CreateImageOptions {
-            from_image: test_image.clone(),
-            ..Default::default()
-        });
+        let test_image =
+            TEST_IMAGE.replace("ghcr.io", &format!("127.0.0.1:{}", registry.random_port));
         docker
-            .create_image(pull_options, None, None)
+            .create_image(
+                Some(CreateImageOptions {
+                    from_image: test_image.clone(),
+                    ..Default::default()
+                }),
+                None,
+                None,
+            )
             .try_collect::<Vec<_>>()
             .await
             .expect("should have pulled test image");
 
-        // Read the index to find the actual manifest digest
-        let index_path = output_root.join("index.json");
-        let index_content = tokio::fs::read_to_string(&index_path)
+        let index_content = tokio::fs::read_to_string(registry.output_root.join("index.json"))
             .await
             .expect("should read index.json");
-        let index_json: serde_json::Value = serde_json::from_str(&index_content)
-            .expect("should parse index.json");
+        let index_json: serde_json::Value =
+            serde_json::from_str(&index_content).expect("should parse index.json");
         let manifest_digest = index_json["manifests"][0]["digest"]
             .as_str()
             .expect("should have digest")
             .to_string();
 
-        let pushed_image_by_digest = format!("127.0.0.1:{random_port}/zarf-dev/doom-game@{}", manifest_digest);
+        let pushed_image_by_digest = format!(
+            "127.0.0.1:{}/zarf-dev/doom-game@{}",
+            registry.random_port, manifest_digest
+        );
 
-        // Verify we can pull the image using its digest
         let verify_pull = docker
             .create_image(
                 Some(CreateImageOptions {
@@ -1079,21 +1055,19 @@ mod test {
             )
             .try_collect::<Vec<_>>()
             .await;
-        if let Err(ref e) = verify_pull {
-            eprintln!("Pull with SHA error: {:?}", e);
-        }
         assert!(
             verify_pull.is_ok(),
             "should have pulled image with SHA: {:?}",
             verify_pull
         );
 
-        // Cleanup
         docker
             .remove_image(&test_image, None, None)
             .await
             .expect("should have cleaned up test image");
-        let _ = docker.remove_image(&pushed_image_by_digest, None, None).await;
+        let _ = docker
+            .remove_image(&pushed_image_by_digest, None, None)
+            .await;
     }
 
     // This localizes the test image's index.json such that the registry server
