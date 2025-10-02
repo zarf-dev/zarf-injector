@@ -6,8 +6,6 @@ name = "zarf-injector"
 edition = "2024"
 
 [dependencies]
-flate2 = "1.1.2"
-tar = "0.4.40"
 sha2 = "0.10.8"
 hex = { version = "0.4.3", default-features = false }
 serde_json = { version = "1.0.113", default-features = false, features = [
@@ -21,7 +19,11 @@ regex-lite = "0.1.5"
 [dev-dependencies]
 anyhow = "1.0.86"
 bollard = "0.17.1"
+flate2 = "1.1.2"
 futures-util = "0.3.30"
+tar = "0.4.40"
+serial_test = "3.2.0"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 
 [profile.release]
 opt-level = "z"   # Optimize for size.
