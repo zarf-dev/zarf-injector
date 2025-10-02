@@ -1090,9 +1090,10 @@ mod test {
         let client = reqwest::Client::new();
         let base_url = format!("http://127.0.0.1:{}", registry.random_port);
 
+        let chunk_size = 512 * 1024;
         // Create test data (1MB)
-        let chunk1 = vec![1u8; 512 * 1024];
-        let chunk2 = vec![2u8; 512 * 1024];
+        let chunk1 = vec![1u8; chunk_size];
+        let chunk2 = vec![2u8; chunk_size];
         let all_data = [chunk1.clone(), chunk2.clone()].concat();
 
         // Calculate digest
@@ -1112,27 +1113,27 @@ mod test {
         // PATCH chunk 1
         let resp = client
             .patch(&format!("{}{}", base_url, location))
-            .header("Content-Range", "0-524287")
+            .header("Content-Range", format!("0-{}", chunk_size - 1))
             .header("Content-Length", chunk1.len())
             .body(chunk1)
             .send()
             .await
             .unwrap();
         assert_eq!(resp.status(), 202);
-        assert_eq!(resp.headers().get("Range").unwrap(), "0-524287");
+        assert_eq!(resp.headers().get("Range").unwrap(), &format!("0-{}", chunk_size - 1));
         let location = resp.headers().get("Location").unwrap().to_str().unwrap();
 
         // PATCH chunk 2
         let resp = client
             .patch(&format!("{}{}", base_url, location))
-            .header("Content-Range", "524288-1048575")
+            .header("Content-Range", format!("{}-{}", chunk_size, 2 * chunk_size - 1))
             .header("Content-Length", chunk2.len())
             .body(chunk2)
             .send()
             .await
             .unwrap();
         assert_eq!(resp.status(), 202);
-        assert_eq!(resp.headers().get("Range").unwrap(), "0-1048575");
+        assert_eq!(resp.headers().get("Range").unwrap(), &format!("0-{}", 2 * chunk_size - 1));
         let location = resp.headers().get("Location").unwrap().to_str().unwrap();
 
         // PUT to close
