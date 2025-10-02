@@ -9,7 +9,7 @@ use axum::{
     Router,
     body::Body,
     extract::{Path, Request},
-    http::{HeaderMap, StatusCode},
+    http::StatusCode,
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -212,7 +212,7 @@ async fn handle_get_digest(tag: String) -> Response {
     }
 }
 
-async fn put_handler(Path(path): Path<String>, headers: HeaderMap, request: Request) -> Response {
+async fn put_handler(Path(path): Path<String>, request: Request) -> Response {
     let query_string = request.uri().query().unwrap_or("");
     println!("PUT request: {} query: {}", path, query_string);
     let manifest_re = Regex::new("(.+)/manifests/(.+)").unwrap();
@@ -222,11 +222,11 @@ async fn put_handler(Path(path): Path<String>, headers: HeaderMap, request: Requ
         let caps = manifest_re.captures(&path).unwrap();
         let name = caps.get(1).unwrap().as_str().to_string();
         let reference = caps.get(2).unwrap().as_str().to_string();
-        handle_put_manifest(name, reference, headers, request).await
+        handle_put_manifest(name, reference, request).await
     } else if blob_re.is_match(&path) {
         let caps = blob_re.captures(&path).unwrap();
         let upload_id = caps.get(2).unwrap().as_str().to_string();
-        handle_put_blob(upload_id, headers, query_string.to_string(), request).await
+        handle_put_blob(upload_id, query_string.to_string(), request).await
     } else {
         Response::builder()
             .status(StatusCode::NOT_FOUND)
@@ -290,12 +290,7 @@ async fn patch_handler(Path(path): Path<String>, request: Request) -> Response {
     }
 }
 
-async fn handle_put_manifest(
-    name: String,
-    reference: String,
-    headers: HeaderMap,
-    request: Request,
-) -> Response {
+async fn handle_put_manifest(name: String, reference: String, request: Request) -> Response {
     let root = PathBuf::from(
         std::env::var("ZARF_INJECTOR_SEED_ROOT").unwrap_or_else(|_| String::from("/zarf-seed")),
     );
@@ -316,20 +311,6 @@ async fn handle_put_manifest(
     hasher.update(&body_bytes);
     let digest = hasher.finalize();
     let digest_str = format!("sha256:{}", digest.encode_hex::<String>());
-
-    // Verify digest if provided
-    if let Some(expected_digest) = headers.get("Docker-Content-Digest") {
-        // println!(
-        //     "Docker-content digest {}",
-        //     expected_digest.to_str().unwrap()
-        // );
-        if expected_digest.to_str().unwrap() != digest_str {
-            return Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body("Digest mismatch".into())
-                .unwrap();
-        }
-    }
 
     // Write manifest to blobs
     let blob_path = root
@@ -435,12 +416,7 @@ async fn handle_post_blob_upload(path: String) -> Response {
         .unwrap()
 }
 
-async fn handle_put_blob(
-    upload_id: String,
-    headers: HeaderMap,
-    query_string: String,
-    request: Request,
-) -> Response {
+async fn handle_put_blob(upload_id: String, query_string: String, request: Request) -> Response {
     let root = PathBuf::from(
         std::env::var("ZARF_INJECTOR_SEED_ROOT").unwrap_or_else(|_| String::from("/zarf-seed")),
     );
@@ -477,8 +453,6 @@ async fn handle_put_blob(
             .unwrap_or("");
         // Simple URL decode for the colon
         encoded.replace("%3A", ":").replace("%3a", ":")
-    } else if let Some(digest) = headers.get("Docker-Content-Digest") {
-        digest.to_str().unwrap().to_string()
     } else {
         // Calculate digest
         let mut hasher = Sha256::new();
