@@ -826,14 +826,14 @@ mod test {
 
     #[tokio::test]
     #[serial]
-    async fn test_pull_mt() {
+    async fn test_pull() {
         let media_types = [OCI_MIME_TYPE, DOCKER_MEDIA_TYPE];
         for media_type in media_types {
-            test_pull(TEST_IMAGE, media_type).await;
+            test_pull_mt(TEST_IMAGE, media_type).await;
         }
     }
 
-    async fn test_pull(image: &str, media_type: &str) {
+    async fn test_pull_mt(image: &str, media_type: &str) {
         let registry = TestRegistry::new(image).await;
 
         // Assert the files and directory we expect to exist do exist
