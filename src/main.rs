@@ -409,7 +409,6 @@ async fn handle_post_blob_upload(path: String) -> Response {
     Response::builder()
         .status(StatusCode::ACCEPTED)
         .header("Location", location)
-        .header("Range", "0-0")
         .header("Docker-Distribution-Api-Version", "registry/2.0")
         .body(Body::empty())
         .unwrap()
@@ -662,11 +661,13 @@ async fn handle_patch_blob(upload_id: String, request: Request) -> Response {
             .unwrap();
     }
 
-    let current_size = body_bytes.len();
+    // Calculate the range: end_of_range is the position of the last byte (0-indexed)
+    // For example, if we uploaded 1000 bytes, positions are 0-999
+    let end_of_range = body_bytes.len().saturating_sub(1);
 
     Response::builder()
         .status(StatusCode::ACCEPTED)
-        .header("Range", format!("0-{}", current_size))
+        .header("Range", format!("0-{}", end_of_range))
         .header("Docker-Distribution-Api-Version", "registry/2.0")
         .body(Body::empty())
         .unwrap()
