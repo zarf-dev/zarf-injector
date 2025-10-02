@@ -56,9 +56,15 @@ jobs:
           git clone https://github.com/zarf-dev/zarf.git
           cd zarf
           git checkout use-push-injector
-          make
-          chmod +x build/zarf
-          sudo mv build/zarf /usr/local/bin/zarf
+          if [ "${{ runner.arch }}" = "ARM64" ]; then
+            make build-cli-linux-arm
+            chmod +x build/zarf-arm
+            sudo mv build/zarf-arm /usr/local/bin/zarf
+          else
+            make build-cli-linux-amd
+            chmod +x build/zarf
+            sudo mv build/zarf /usr/local/bin/zarf
+          fi
 
       - name: "Setup K3d" 
         run: |

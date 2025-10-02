@@ -457,7 +457,7 @@ async fn handle_put_blob(
     };
 
     // Try to read from temporary file first (from PATCH), otherwise use request body
-    let temp_path = root.join(".uploads").join(&upload_id);
+    let temp_path: PathBuf = root.join(".uploads").join(&upload_id);
     let body_bytes = if temp_path.exists() {
         match tokio::fs::read(&temp_path).await {
             Ok(bytes) => bytes,
