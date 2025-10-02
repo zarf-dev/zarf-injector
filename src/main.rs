@@ -849,7 +849,7 @@ mod test {
             .expect("should have been able to create a Docker client");
 
         let image_name = extract_name(image);
-        let test_image = format!("127.0.0.1:{}/{}", registry.random_port, image_name);
+        let test_image = format!("{}/{}", registry.address, image_name);
 
         let test_image_pull = docker
             .create_image(
@@ -870,13 +870,14 @@ mod test {
     }
 
     struct TestRegistry {
-        random_port: u16,
+        address: String,
         output_root: PathBuf,
         _seed_guard: EnvGuard,
         _tmpdir: TempDir,
     }
 
     impl TestRegistry {
+        // This setups up a registry with a test image packed into it
         async fn new(image: &str) -> Self {
             let tmpdir = TempDir::new().expect("should have created temporary directory");
 
@@ -897,10 +898,10 @@ mod test {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
                 .await
                 .expect("should have been able to bind listener to a random port on localhost");
-            let random_port = listener
+            let address = listener
                 .local_addr()
                 .expect("should have been able to resolve the address")
-                .port();
+                .to_string();
 
             tokio::spawn(async {
                 let app = start_seed_registry();
@@ -910,7 +911,7 @@ mod test {
             });
 
             for _ in 0..10 {
-                if tokio::net::TcpStream::connect(format!("127.0.0.1:{}", random_port))
+                if tokio::net::TcpStream::connect(&address)
                     .await
                     .is_ok()
                 {
@@ -920,7 +921,7 @@ mod test {
             }
 
             Self {
-                random_port,
+                address,
                 output_root,
                 _seed_guard,
                 _tmpdir: tmpdir,
@@ -940,8 +941,7 @@ mod test {
         let docker = Docker::connect_with_socket_defaults()
             .expect("should have been able to create a Docker client");
 
-        let test_image =
-            TEST_IMAGE.replace("ghcr.io", &format!("127.0.0.1:{}", registry.random_port));
+        let test_image = TEST_IMAGE.replace("ghcr.io", &registry.address);
         docker
             .create_image(
                 Some(CreateImageOptions {
@@ -955,15 +955,12 @@ mod test {
             .await
             .expect("should have pulled test image");
 
-        let pushed_image = format!(
-            "127.0.0.1:{}/zarf-dev/doom-game:pushed-test",
-            registry.random_port
-        );
+        let pushed_image = format!("{}/zarf-dev/doom-game:pushed-test", registry.address);
         docker
             .tag_image(
                 &test_image,
                 Some(bollard::image::TagImageOptions {
-                    repo: format!("127.0.0.1:{}/zarf-dev/doom-game", registry.random_port),
+                    repo: format!("{}/zarf-dev/doom-game", registry.address),
                     tag: "pushed-test".to_string(),
                 }),
             )
@@ -1025,8 +1022,7 @@ mod test {
         let docker = Docker::connect_with_socket_defaults()
             .expect("should have been able to create a Docker client");
 
-        let test_image =
-            TEST_IMAGE.replace("ghcr.io", &format!("127.0.0.1:{}", registry.random_port));
+        let test_image = TEST_IMAGE.replace("ghcr.io", &registry.address);
         docker
             .create_image(
                 Some(CreateImageOptions {
@@ -1051,8 +1047,8 @@ mod test {
             .to_string();
 
         let pushed_image_by_digest = format!(
-            "127.0.0.1:{}/zarf-dev/doom-game@{}",
-            registry.random_port, manifest_digest
+            "{}/zarf-dev/doom-game@{}",
+            registry.address, manifest_digest
         );
 
         let verify_pull = docker
@@ -1088,7 +1084,7 @@ mod test {
 
         let registry = TestRegistry::new(TEST_IMAGE).await;
         let client = reqwest::Client::new();
-        let base_url = format!("http://127.0.0.1:{}", registry.random_port);
+        let base_url = format!("http://{}", registry.address);
 
         let chunk_size = 512 * 1024;
         // Create test data (1MB)
