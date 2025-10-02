@@ -116,7 +116,6 @@ async fn handle_get_manifest(name: String, reference: String) -> Response {
                     .strip_prefix("sha256:")
                     .unwrap()
                     .to_owned();
-                break;
             }
         }
     }
@@ -320,6 +319,10 @@ async fn handle_put_manifest(
 
     // Verify digest if provided
     if let Some(expected_digest) = headers.get("Docker-Content-Digest") {
+        // println!(
+        //     "Docker-content digest {}",
+        //     expected_digest.to_str().unwrap()
+        // );
         if expected_digest.to_str().unwrap() != digest_str {
             return Response::builder()
                 .status(StatusCode::BAD_REQUEST)
@@ -714,6 +717,7 @@ mod test {
     use flate2::{Compression, write::GzEncoder};
     use futures_util::{TryStreamExt, future::ready};
     use regex_lite::Regex;
+    use serial_test::serial;
     use std::{
         fs::File,
         io::{Cursor, Seek, Write},
@@ -774,6 +778,7 @@ mod test {
     const REFERENCE_REGEXP: &str = r"^((?:(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9])(?:(?:\.(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]))+)?(?::[0-9]+)?/)?[a-z0-9]+(?:(?:(?:[._]|__|[-]*)[a-z0-9]+)+)?(?:(?:/[a-z0-9]+(?:(?:(?:[._]|__|[-]*)[a-z0-9]+)+)?)+)?)(?::([\w][\w.-]{0,127}))?(?:@([A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*[:][[:xdigit:]]{32,}))?$";
 
     #[tokio::test]
+    #[serial]
     async fn test_integration() {
         let media_types = [OCI_MIME_TYPE, DOCKER_MEDIA_TYPE];
         for media_type in media_types {
@@ -854,6 +859,7 @@ mod test {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_push_integration() {
         let docker = Docker::connect_with_socket_defaults()
             .expect("should have been able to create a Docker client");
