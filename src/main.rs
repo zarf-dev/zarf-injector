@@ -263,7 +263,7 @@ async fn head_handler(Path(path): Path<String>) -> Response {
         handle_head_manifest(name, reference).await
     } else if blob_re.is_match(&path) {
         let caps = blob_re.captures(&path).unwrap();
-        let digest = caps.get(1).unwrap().as_str().to_string();
+        let digest: String = caps.get(1).unwrap().as_str().to_string();
         handle_head_blob(digest).await
     } else {
         Response::builder()
@@ -1120,20 +1120,29 @@ mod test {
             .await
             .unwrap();
         assert_eq!(resp.status(), 202);
-        assert_eq!(resp.headers().get("Range").unwrap(), &format!("0-{}", chunk_size - 1));
+        assert_eq!(
+            resp.headers().get("Range").unwrap(),
+            &format!("0-{}", chunk_size - 1)
+        );
         let location = resp.headers().get("Location").unwrap().to_str().unwrap();
 
         // PATCH chunk 2
         let resp = client
             .patch(&format!("{}{}", base_url, location))
-            .header("Content-Range", format!("{}-{}", chunk_size, 2 * chunk_size - 1))
+            .header(
+                "Content-Range",
+                format!("{}-{}", chunk_size, 2 * chunk_size - 1),
+            )
             .header("Content-Length", chunk2.len())
             .body(chunk2)
             .send()
             .await
             .unwrap();
         assert_eq!(resp.status(), 202);
-        assert_eq!(resp.headers().get("Range").unwrap(), &format!("0-{}", 2 * chunk_size - 1));
+        assert_eq!(
+            resp.headers().get("Range").unwrap(),
+            &format!("0-{}", 2 * chunk_size - 1)
+        );
         let location = resp.headers().get("Location").unwrap().to_str().unwrap();
 
         // PUT to close
