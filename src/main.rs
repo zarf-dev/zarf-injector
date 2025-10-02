@@ -279,8 +279,9 @@ async fn patch_handler(Path(path): Path<String>, request: Request) -> Response {
 
     if blob_re.is_match(&path) {
         let caps = blob_re.captures(&path).unwrap();
+        let name = caps.get(1).unwrap().as_str().to_string();
         let upload_id = caps.get(2).unwrap().as_str().to_string();
-        handle_patch_blob(upload_id, request).await
+        handle_patch_blob(name, upload_id, request).await
     } else {
         Response::builder()
             .status(StatusCode::NOT_FOUND)
@@ -628,10 +629,17 @@ async fn handle_head_blob(digest: String) -> Response {
     }
 }
 
-async fn handle_patch_blob(upload_id: String, request: Request) -> Response {
+async fn handle_patch_blob(name: String, upload_id: String, request: Request) -> Response {
     let root = PathBuf::from(
         std::env::var("ZARF_INJECTOR_SEED_ROOT").unwrap_or_else(|_| String::from("/zarf-seed")),
     );
+
+    // Get Content-Range header to validate upload order
+    let content_range = request
+        .headers()
+        .get("Content-Range")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.to_string());
 
     // Read the body
     let body_bytes = match axum::body::to_bytes(request.into_body(), usize::MAX).await {
@@ -654,19 +662,84 @@ async fn handle_patch_blob(upload_id: String, request: Request) -> Response {
     }
 
     let temp_path = temp_dir.join(&upload_id);
-    if let Err(_) = tokio::fs::write(&temp_path, &body_bytes).await {
-        return Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .body("Failed to write temp file".into())
-            .unwrap();
+
+    // Get the current size of existing data
+    let existing_size = if temp_path.exists() {
+        match tokio::fs::metadata(&temp_path).await {
+            Ok(meta) => meta.len() as usize,
+            Err(_) => 0,
+        }
+    } else {
+        0
+    };
+
+    // Validate Content-Range if provided
+    if let Some(range) = content_range {
+        // Parse Content-Range header (Example: "0-1000")
+        let range_re = Regex::new(r"^(\d+)-(\d+)$").unwrap();
+        if let Some(caps) = range_re.captures(&range) {
+            let start: usize = caps.get(1).unwrap().as_str().parse().unwrap_or(0);
+            let end: usize = caps.get(2).unwrap().as_str().parse().unwrap_or(0);
+
+            // Validate that start matches existing_size
+            if start != existing_size {
+                return Response::builder()
+                    .status(StatusCode::RANGE_NOT_SATISFIABLE)
+                    .header("Range", format!("0-{}", existing_size.saturating_sub(1)))
+                    .body("Chunk out of order".into())
+                    .unwrap();
+            }
+
+            // Validate that the chunk size matches end - start + 1
+            let expected_size = end - start + 1;
+            if body_bytes.len() != expected_size {
+                return Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body("Content-Length does not match Content-Range".into())
+                    .unwrap();
+            }
+        }
     }
 
-    // Calculate the range: end_of_range is the position of the last byte (0-indexed)
-    // For example, if we uploaded 1000 bytes, positions are 0-999
-    let end_of_range = body_bytes.len().saturating_sub(1);
+    // Append data to the temporary file
+    if existing_size > 0 {
+        // Read existing data, append new data, and write back
+        match tokio::fs::read(&temp_path).await {
+            Ok(mut existing_data) => {
+                existing_data.extend_from_slice(&body_bytes);
+                if let Err(_) = tokio::fs::write(&temp_path, &existing_data).await {
+                    return Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body("Failed to write temp file".into())
+                        .unwrap();
+                }
+            }
+            Err(_) => {
+                return Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .body("Failed to read existing temp file".into())
+                    .unwrap();
+            }
+        }
+    } else {
+        // No existing data, just write the new data
+        if let Err(_) = tokio::fs::write(&temp_path, &body_bytes).await {
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body("Failed to write temp file".into())
+                .unwrap();
+        }
+    }
+
+    // Calculate new total size (end-of-range is the position of the last byte)
+    let new_total_size = existing_size + body_bytes.len();
+    let end_of_range = new_total_size.saturating_sub(1);
+
+    let location = format!("/v2/{}/blobs/uploads/{}", name, upload_id);
 
     Response::builder()
         .status(StatusCode::ACCEPTED)
+        .header("Location", location)
         .header("Range", format!("0-{}", end_of_range))
         .header("Docker-Distribution-Api-Version", "registry/2.0")
         .body(Body::empty())
@@ -1006,6 +1079,69 @@ mod test {
         let _ = docker
             .remove_image(&pushed_image_by_digest, None, None)
             .await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_multi_chunk_upload() {
+        use sha2::{Digest, Sha256};
+
+        let registry = TestRegistry::new(TEST_IMAGE).await;
+        let client = reqwest::Client::new();
+        let base_url = format!("http://127.0.0.1:{}", registry.random_port);
+
+        // Create test data (1MB)
+        let chunk1 = vec![1u8; 512 * 1024];
+        let chunk2 = vec![2u8; 512 * 1024];
+        let all_data = [chunk1.clone(), chunk2.clone()].concat();
+
+        // Calculate digest
+        let mut hasher = Sha256::new();
+        hasher.update(&all_data);
+        let digest = format!("sha256:{}", hex::encode(hasher.finalize()));
+
+        // POST to start upload
+        let resp = client
+            .post(&format!("{}/v2/test/blobs/uploads/", base_url))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 202);
+        let location = resp.headers().get("Location").unwrap().to_str().unwrap();
+
+        // PATCH chunk 1
+        let resp = client
+            .patch(&format!("{}{}", base_url, location))
+            .header("Content-Range", "0-524287")
+            .header("Content-Length", chunk1.len())
+            .body(chunk1)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 202);
+        assert_eq!(resp.headers().get("Range").unwrap(), "0-524287");
+        let location = resp.headers().get("Location").unwrap().to_str().unwrap();
+
+        // PATCH chunk 2
+        let resp = client
+            .patch(&format!("{}{}", base_url, location))
+            .header("Content-Range", "524288-1048575")
+            .header("Content-Length", chunk2.len())
+            .body(chunk2)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 202);
+        assert_eq!(resp.headers().get("Range").unwrap(), "0-1048575");
+        let location = resp.headers().get("Location").unwrap().to_str().unwrap();
+
+        // PUT to close
+        let resp = client
+            .put(&format!("{}{}?digest={}", base_url, location, digest))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 201);
     }
 
     // This localizes the test image's index.json such that the registry server
